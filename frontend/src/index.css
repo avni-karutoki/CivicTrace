@@ -1,0 +1,110 @@
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;0,700;0,900;1,400;1,600;1,700;1,900&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,500;0,600;1,400;1,500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&display=swap');
+@import 'tailwindcss';
+
+@theme {
+  --font-display: 'Playfair Display', Georgia, serif;
+  --font-body: 'Lora', Georgia, serif;
+  --font-mono: 'Space Mono', 'Courier New', monospace;
+
+  --color-parchment: #F5F0E8;
+  --color-parchment-dark: #EDE5D4;
+  --color-espresso: #1C0A00;
+  --color-espresso-light: #3D1F00;
+  --color-warm-brown: #5C4A32;
+  --color-tan: #C8B89A;
+  --color-card: #FAF7F2;
+
+  --color-reported: #9B3A3A;
+  --color-urgent: #C4622D;
+  --color-in-progress: #3A6B9B;
+  --color-resolved: #4A7C5F;
+  --color-disputed: #B8872A;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: var(--font-body);
+  background-color: #F5F0E8;
+  color: #1C0A00;
+}
+
+/* Paper grain texture overlay */
+body::before {
+  content: '';
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='400' height='400'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='400' height='400' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");
+  pointer-events: none;
+  z-index: 9999;
+  opacity: 0.5;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: #F5F0E8; }
+::-webkit-scrollbar-thumb { background: #C8B89A; border-radius: 3px; }
+
+.font-display { font-family: var(--font-display); }
+.font-body { font-family: var(--font-body); }
+.font-mono { font-family: var(--font-mono); }
+
+/* Decorative rule */
+.decorative-rule {
+  border: none;
+  height: 1px;
+  background: linear-gradient(to right, transparent, #C8B89A, transparent);
+}
+
+/* Card hover lift */
+.card-lift {
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.card-lift:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 32px rgba(28,10,0,0.12);
+}
+
+/* Pulse animation for map markers */
+@keyframes pulse-marker {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.7; transform: scale(1.15); }
+}
+.pulse { animation: pulse-marker 2s ease-in-out infinite; }
+
+/* Count-up highlight */
+@keyframes count-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.count-up { animation: count-up 0.6s ease-out forwards; }
+
+/* Timeline connector */
+.timeline-line {
+  position: relative;
+}
+.timeline-line::before {
+  content: '';
+  position: absolute;
+  left: 11px;
+  top: 24px;
+  bottom: -8px;
+  width: 1px;
+  background: #C8B89A;
+}
+
+/* Blockchain verified glow */
+@keyframes verify-glow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(74,124,95,0); }
+  50% { box-shadow: 0 0 12px 3px rgba(74,124,95,0.25); }
+}
+.verify-glow { animation: verify-glow 2.5s ease-in-out infinite; }
+
