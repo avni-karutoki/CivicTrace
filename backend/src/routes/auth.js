@@ -45,6 +45,17 @@ router.post("/login", asyncHandler(async (req, res) => {
     user = created;
   }
 
+  // Returning user: refresh the stored display name so the greeting reflects
+  // what was typed this time. Role is intentionally NOT touched here — the
+  // citizen form always sends role "citizen" and must never demote authorities.
+  if (existing && name && name !== user.name) {
+    const { error: renameError } = await supabase
+      .from("users")
+      .update({ name })
+      .eq("id", user.id);
+    if (!renameError) user = { ...user, name };
+  }
+
   // "Token" is just the user id for this prototype — swap for real JWT/session before real deployment.
   res.json({ token: user.id, user: { id: user.id, name: user.name, role: user.role } });
 }));

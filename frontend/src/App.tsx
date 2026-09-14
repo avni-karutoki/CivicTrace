@@ -1929,16 +1929,66 @@ function ReportEvidencePage({ onBack, onContinue }: { onBack: () => void; onCont
   const [uploading, setUploading] = useState(false);
   const [method, setMethod] = useState<"camera" | "upload" | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const [camActive, setCamActive] = useState(false);
+  const [camErr, setCamErr] = useState("");
   const [preview, setPreview] = useState<string | null>(null);
   const [note, setNote] = useState("");
   const civic = useCivic();
 
-  function simulateCapture(m: "camera" | "upload") {
-    setMethod(m);
-    if (m === "camera") {
-      setUploading(true);
-      setTimeout(() => { setUploading(false); setCaptured(true); setPreview(null); }, 1400);
+  function stopCamera() {
+    streamRef.current?.getTracks().forEach(t => t.stop());
+    streamRef.current = null;
+    setCamActive(false);
+  }
+
+  // Attach the live stream once the video element is rendered.
+  useEffect(() => {
+    if (camActive && videoRef.current && streamRef.current) {
+      videoRef.current.srcObject = streamRef.current;
     }
+  }, [camActive]);
+
+  // Never leave the camera running when leaving this step.
+  useEffect(() => () => { streamRef.current?.getTracks().forEach(t => t.stop()); }, []);
+
+  async function startCamera() {
+    setCamErr("");
+    setMethod("camera");
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setMethod(null);
+      setCamErr("This browser cannot access the camera. Use Upload File instead.");
+      return;
+    }
+    setUploading(true);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false });
+      streamRef.current = stream;
+      setCamActive(true);
+    } catch {
+      setMethod(null);
+      setCamErr("Camera blocked — allow camera permission in the browser, or use Upload File.");
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  function capturePhoto() {
+    const video = videoRef.current;
+    if (!video || !video.videoWidth) return;
+    const scale = Math.min(1, 1280 / video.videoWidth);
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(video.videoWidth * scale);
+    canvas.height = Math.round(video.videoHeight * scale);
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const dataUrl = canvas.toDataURL("image/jpeg", 0.82);
+    setPreview(dataUrl);
+    civic.setDraft({ photoDataUrl: dataUrl });
+    setCaptured(true);
+    stopCamera();
   }
 
   function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
@@ -2036,6 +2086,25 @@ function ReportEvidencePage({ onBack, onContinue }: { onBack: () => void; onCont
                         {method === "camera" ? "Accessing camera…" : "Processing image…"}
                       </div>
                     </div>
+                  ) : method === "camera" && camActive ? (
+                    <>
+                      {/* Live camera viewfinder */}
+                      <video ref={videoRef} autoPlay playsInline muted className="w-full"
+                        style={{ maxHeight: 320, background: "#1C0A00", borderRadius: "2px", marginBottom: 16 }}/>
+                      <button onClick={capturePhoto}
+                        className="flex items-center justify-center gap-2 px-8 py-3 transition-colors hover:opacity-90"
+                        style={{ background: "#1C0A00", color: "#F5F0E8", borderRadius: "1px",
+                          fontFamily: "var(--font-mono)", fontSize: "0.62rem", letterSpacing: "0.1em", textTransform: "uppercase" }}>
+                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                          <circle cx="7" cy="7" r="5.5" stroke="currentColor" strokeWidth="1.2"/>
+                          <circle cx="7" cy="7" r="2" fill="currentColor"/>
+                        </svg>
+                        Capture Photo
+                      </button>
+                      <div style={{ fontFamily: "var(--font-body)", fontSize: "0.74rem", color: "#5C4A32", opacity: 0.6, maxWidth: 280, lineHeight: 1.5, marginTop: 10 }}>
+                        Live camera — frame the issue and capture. The photo is time-stamped and sent with your report.
+                      </div>
+                    </>
                   ) : (
                     <>
                       {/* Camera illustration */}
@@ -2059,7 +2128,7 @@ function ReportEvidencePage({ onBack, onContinue }: { onBack: () => void; onCont
 
                 {/* Capture options */}
                 <div className="flex gap-3">
-                  <button onClick={() => simulateCapture("camera")}
+                  <button onClick={startCamera}
                     className="flex-1 flex items-center justify-center gap-2 py-3 border hover:bg-[#1C0A00] hover:text-[#F5F0E8] group transition-colors"
                     style={{ borderColor: "#1C0A00", color: "#1C0A00", borderRadius: "1px",
                       fontFamily: "var(--font-mono)", fontSize: "0.62rem", letterSpacing: "0.1em", textTransform: "uppercase" }}>
@@ -2080,8 +2149,15 @@ function ReportEvidencePage({ onBack, onContinue }: { onBack: () => void; onCont
                     </svg>
                     Upload File
                   </button>
-                  <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleFile}/>
+                  <input ref={fileRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={handleFile}/>
                 </div>
+                {camErr && (
+                  <div className="mt-3 px-4 py-3 border"
+                    style={{ background: "#F8EEEE", borderColor: "#9B3A3A", borderRadius: "1px",
+                      fontFamily: "var(--font-body)", fontSize: "0.78rem", color: "#9B3A3A", lineHeight: 1.5 }}>
+                    {camErr}
+                  </div>
+                )}
               </div>
             ) : (
               /* Preview state */
@@ -2128,7 +2204,7 @@ function ReportEvidencePage({ onBack, onContinue }: { onBack: () => void; onCont
                 </div>
 
                 <div className="flex gap-3 mb-4">
-                  <button onClick={() => { setCaptured(false); setPreview(null); setMethod(null); }}
+                  <button onClick={() => { stopCamera(); setCaptured(false); setPreview(null); setMethod(null); setCamErr(""); civic.setDraft({ photoDataUrl: null }); }}
                     className="flex items-center gap-1.5 px-4 py-2.5 border hover:bg-[#EDE5D4] transition-colors"
                     style={{ borderColor: "#C8B89A", color: "#5C4A32", borderRadius: "1px",
                       fontFamily: "var(--font-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", textTransform: "uppercase" }}>
@@ -2306,10 +2382,14 @@ function ReportDetailsPage({ onBack, onContinue }: { onBack: () => void; onConti
     setSubmitting(true);
     setSubmitErr("");
     civic.setDraft({ summary: summary.trim(), description: description.trim() });
-    // Submit against the live backend, then move to the confirmation page.
-    // The submitted page shows the real tracking code (or the error offline).
-    await civic.submitReport().catch(() => null);
+    // Submit against the live backend. Only advance on success — a failed save
+    // stays on this page with the error shown, and never shows a demo code.
+    const result = await civic.submitReport().catch(() => null);
     setSubmitting(false);
+    if (!result || !result.ok) {
+      setSubmitErr(result?.error || "Could not save your report. Check your connection and try again.");
+      return;
+    }
     onContinue();
   }
 
@@ -2780,24 +2860,31 @@ function ReportDetailsPage({ onBack, onContinue }: { onBack: () => void; onConti
             Back
           </button>
           <div className="flex items-center gap-3">
-            {!canContinue && (
+            {!canContinue && !submitErr && (
               <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.57rem", color: "#5C4A32", opacity: 0.45 }}>
                 {!summary.trim() ? "Add an issue summary" : "Capture verification photo"}
               </span>
             )}
-            <button onClick={canContinue ? onContinue : undefined}
+            {submitErr && (
+              <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.57rem", color: "#9B3A3A" }}>
+                {submitErr}
+              </span>
+            )}
+            <button onClick={canContinue && !submitting ? handleSubmit : undefined}
               className="flex items-center gap-2 px-6 py-3"
               style={{
                 background: canContinue ? "#1C0A00" : "#C8B89A",
                 color: canContinue ? "#F5F0E8" : "#FAF7F2",
-                borderRadius: "1px", cursor: canContinue ? "pointer" : "default",
+                borderRadius: "1px", cursor: canContinue && !submitting ? "pointer" : "default",
                 fontFamily: "var(--font-mono)", fontSize: "0.62rem", letterSpacing: "0.12em", textTransform: "uppercase",
                 opacity: canContinue ? 1 : 0.5, transition: "all 0.2s ease",
               }}>
-              Review &amp; Submit
+              {submitting ? "Saving…" : "Review & Submit"}
+              {!submitting && (
               <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
                 <path d="M4 2 L8 6 L4 10" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
               </svg>
+              )}
             </button>
           </div>
         </div>
@@ -2853,7 +2940,7 @@ function ComplaintSubmittedPage({ onNavigate }: { onNavigate: (p: Page) => void 
   const [scoreCount, setScoreCount] = useState(0);
   const civic = useCivic();
   const result = civic.lastResult;
-  const COMPLAINT_ID = result?.trackingCode || "CTY-48291-X";
+  const COMPLAINT_ID = result?.trackingCode || "";
 
   // Animate civic impact score on mount
   useEffect(() => {
@@ -2870,6 +2957,37 @@ function ComplaintSubmittedPage({ onNavigate }: { onNavigate: (p: Page) => void 
     navigator.clipboard?.writeText(COMPLAINT_ID).catch(() => {});
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  }
+
+  // Unreachable in the normal flow (the details page only advances on a
+  // successful save) — but a missing/failed result must show an error panel,
+  // never a demo ID.
+  if (!result || !result.ok || !COMPLAINT_ID) {
+    return (
+      <div style={{ background: "#F5F0E8", minHeight: "100vh", fontFamily: "var(--font-body)" }}>
+        <div className="max-w-3xl mx-auto px-6 py-14">
+          <div className="border text-center px-8 py-14" style={{ background: "#FAF7F2", borderColor: "#C8B89A", borderRadius: "2px" }}>
+            <div style={{ fontFamily: "var(--font-mono)", fontSize: "0.6rem", letterSpacing: "0.18em", textTransform: "uppercase", color: "#9B3A3A", marginBottom: 10 }}>
+              Report Not Saved
+            </div>
+            <h1 style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontStyle: "italic", fontSize: "clamp(1.6rem, 3.5vw, 2.4rem)", color: "#1C0A00", lineHeight: 1.15, marginBottom: 14 }}>
+              Your report did not reach the server.
+            </h1>
+            <p style={{ fontFamily: "var(--font-body)", fontSize: "0.9rem", color: "#5C4A32", opacity: 0.75, maxWidth: 440, margin: "0 auto", lineHeight: 1.7, marginBottom: 26 }}>
+              {result?.error || "Nothing was saved. Go back, check your connection, and submit again — your details are kept."}
+            </p>
+            <div className="flex items-center justify-center gap-3">
+              <button onClick={() => onNavigate("report-details")} className="px-6 py-3" style={{ background: "#1C0A00", color: "#F5F0E8", borderRadius: "1px", fontFamily: "var(--font-mono)", fontSize: "0.62rem", letterSpacing: "0.12em", textTransform: "uppercase" }}>
+                Try Again
+              </button>
+              <button onClick={() => onNavigate("dashboard")} className="px-6 py-3 border" style={{ borderColor: "#C8B89A", color: "#5C4A32", borderRadius: "1px", fontFamily: "var(--font-mono)", fontSize: "0.62rem", letterSpacing: "0.12em", textTransform: "uppercase" }}>
+                Dashboard
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   // Full 6-step lifecycle
@@ -2978,16 +3096,6 @@ function ComplaintSubmittedPage({ onNavigate }: { onNavigate: (p: Page) => void 
         </div>
 
         {/* ── 2. COMPLAINT ID — focal element ── */}
-        {result && !result.ok && (
-          <div className="border mb-5 px-5 py-4" style={{ background: "#F8EEEE", borderColor: "#9B3A3A", borderRadius: "2px" }}>
-            <div style={{ fontFamily: "var(--font-mono)", fontSize: "0.62rem", letterSpacing: "0.08em", textTransform: "uppercase", color: "#9B3A3A", marginBottom: 4 }}>
-              Submission could not reach the backend
-            </div>
-            <div style={{ fontFamily: "var(--font-body)", fontSize: "0.82rem", color: "#1C0A00", lineHeight: 1.5 }}>
-              {result.error}
-            </div>
-          </div>
-        )}
         {result?.merged && (
           <div className="border mb-5 px-5 py-3" style={{ background: "#FBF6EB", borderColor: "#B8872A", borderRadius: "2px" }}>
             <div style={{ fontFamily: "var(--font-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", textTransform: "uppercase", color: "#B8872A" }}>
@@ -10112,11 +10220,27 @@ function AuthorityLoginPage({ onNavigate }: { onNavigate: (p: Page) => void }) {
     if (!password.trim()) { setPassErr("Password is required."); ok = false; } else setPassErr("");
     if (!ok) return;
     setSignInErr("");
-    // Best-effort backend login (demo auth: email is the identity). Always
-    // continue so the demo works even when the backend is unreachable.
+    // Demo auth: email is the identity (password is not verified server-side).
+    // The backend freezes identity+role at first signup, so an email once used
+    // on the citizen form stays "citizen" — never enter the authority area
+    // with a non-authority account. Verify the saved user before navigating.
     const name = email.trim().split("@")[0] || "Officer";
     const logged = await civic.login(name, email.trim(), "authority").catch(() => false);
-    if (!logged) setSignInErr("Backend unreachable — continuing offline. Actions will not be saved.");
+    let role: string | null = null;
+    try {
+      const raw = localStorage.getItem("civictrace_user");
+      role = raw ? (JSON.parse(raw) as { role?: string }).role ?? null : null;
+    } catch {
+      role = null;
+    }
+    if (!logged || !role) {
+      setSignInErr("Backend unreachable — cannot verify authority access. Check your connection and retry.");
+      return;
+    }
+    if (role !== "authority") {
+      setSignInErr("This email is registered as a citizen account. Use a different official email for authority access.");
+      return;
+    }
     onNavigate("authority-dashboard");
   }
 
