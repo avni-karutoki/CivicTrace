@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useCivic, useLiveComplaints, useLiveLeaderboard, useLiveMyComplaints, useLiveNotifications, useLiveVerification } from "./store";
+import { PageTransition, Reveal, AnimatedNumber } from "./motion";
 import { api, CATEGORY_LABELS, PRIORITY_UI, STATUS_UI, timeAgo, daysOpen, toCardComplaint } from "./api/civictrace";
 import type { BackendComplaint } from "./api/civictrace";
 
@@ -433,7 +434,7 @@ function AuthPage({ onBack, onSuccess }: { onBack: () => void; onSuccess?: () =>
                     opacity: loading ? 0.7 : 1,
                   }}>
                   {loading ? (
-                    <svg className="animate-spin" width="14" height="14" viewBox="0 0 14 14" fill="none">
+                    <svg className="spinner" width="14" height="14" viewBox="0 0 14 14" fill="none">
                       <circle cx="7" cy="7" r="5" stroke="#F5F0E8" strokeWidth="1.5" strokeDasharray="20 12"/>
                     </svg>
                   ) : (
@@ -568,7 +569,7 @@ function CivicMap({ compact = false }: { compact?: boolean }) {
 
       {/* Map markers */}
       {markers.map((m, i) => (
-        <g key={i}>
+        <g key={i} className="pin-drop" style={{ animationDelay: `${i * 70}ms` }}>
           <circle cx={m.x} cy={m.y} r="10" fill={m.color} opacity="0.15" className={i < 3 ? "pulse" : ""}/>
           <circle cx={m.x} cy={m.y} r="6" fill={m.color} stroke="white" strokeWidth="1.5"/>
           <circle cx={m.x} cy={m.y} r="2.5" fill="white"/>
@@ -708,7 +709,7 @@ function StatusBadge({ status }: { status: string }) {
   };
   const s = map[status] || map["REPORTED"];
   return (
-    <span className="font-mono text-xs px-2 py-0.5 border" style={{ background: s.bg, color: s.text, borderColor: s.border, letterSpacing: "0.08em" }}>
+    <span className="badge-in font-mono text-xs px-2 py-0.5 border" style={{ background: s.bg, color: s.text, borderColor: s.border, letterSpacing: "0.08em" }}>
       {status}
     </span>
   );
@@ -825,7 +826,7 @@ function DeptRow({ rank, name, rate, time, reopen, trust, active }: {
         <div className="font-mono text-xs opacity-40" style={{ color: "#5C4A32" }}>Reopen Rate</div>
       </div>
       <div className="flex flex-col items-end">
-        <div className="font-display font-bold text-xl" style={{ color: trust >= 90 ? "#4A7C5F" : trust >= 80 ? "#B8872A" : "#9B3A3A" }}>{trust}</div>
+        <div className="font-display font-bold text-xl" style={{ color: trust >= 90 ? "#4A7C5F" : trust >= 80 ? "#B8872A" : "#9B3A3A" }}><AnimatedNumber value={trust} duration={800} /></div>
         <div className="font-mono text-xs opacity-40" style={{ color: "#5C4A32" }}>Trust</div>
       </div>
     </div>
@@ -862,7 +863,7 @@ function CivicImpactCard() {
         <div className="font-display font-bold" style={{ fontSize: "5rem", lineHeight: 1, color: "#1C0A00" }}>{score}</div>
         <div className="font-body text-sm opacity-50 mt-1" style={{ color: "#5C4A32" }}>/ 100</div>
         <div className="mt-4 w-full h-2 rounded-full overflow-hidden" style={{ background: "#EDE5D4" }}>
-          <div className="h-full transition-all duration-1000" style={{ width: `${score}%`, background: "linear-gradient(to right, #9B3A3A, #C4622D)" }}/>
+          <div className="h-full bar-fill" style={{ width: `${score}%`, background: "linear-gradient(to right, #9B3A3A, #C4622D)" }}/>
         </div>
       </div>
       <div className="p-5 space-y-3">
@@ -11852,30 +11853,31 @@ export default function App() {
     { id: "CTY-55017-M", issue: "Broken Streetlight", location: "Sector M, Park Avenue", priority: "URGENT", status: "REPORTED", score: 62 },
   ];
 
-  if (page === "auth") return <AuthPage onBack={() => setPage("home")} onSuccess={() => setPage("dashboard")}/>;
-  if (page === "dashboard") return <CitizenDashboard onNavigate={setPage}/>;
-  if (page === "report-category") return <ReportCategoryPage onBack={() => setPage("dashboard")} onContinue={() => setPage("report-evidence")}/>;
-  if (page === "report-evidence") return <ReportEvidencePage onBack={() => setPage("report-category")} onContinue={() => setPage("report-details")}/>;
-  if (page === "report-details") return <ReportDetailsPage onBack={() => setPage("report-evidence")} onContinue={() => setPage("complaint-submitted")}/>;
-  if (page === "complaint-submitted") return <ComplaintSubmittedPage onNavigate={setPage}/>;
-  if (page === "my-complaints") return <MyComplaintsPage onNavigate={setPage}/>;
-  if (page === "complaint-detail") return <ComplaintDetailPage onNavigate={setPage}/>;
-  if (page === "proof-of-fix") return <ProofOfFixPage onNavigate={setPage}/>;
-  if (page === "civic-map") return <PublicCivicMapPage onNavigate={setPage}/>;
-  if (page === "public-record") return <PublicComplaintRecordPage onNavigate={setPage}/>;
-  if (page === "verification") return <VerificationPage onNavigate={setPage}/>;
-  if (page === "leaderboard") return <LeaderboardPage onNavigate={setPage}/>;
-  if (page === "dept-trust") return <DeptTrustPage onNavigate={setPage}/>;
-  if (page === "impact-dashboard") return <ImpactDashboardPage onNavigate={setPage}/>;
-  if (page === "about") return <AboutPage onNavigate={setPage}/>;
-  if (page === "how-it-works") return <HowItWorksPage onNavigate={setPage}/>;
-  if (page === "authority-login") return <AuthorityLoginPage onNavigate={setPage}/>;
-  if (page === "authority-dashboard") return <AuthorityDashboardPage onNavigate={setPage}/>;
-  if (page === "authority-complaint-queue") return <AuthorityComplaintQueuePage onNavigate={setPage}/>;
-  if (page === "authority-complaint-detail") return <AuthorityComplaintDetailPage onNavigate={setPage}/>;
-  if (page === "authority-escalations") return <AuthorityEscalationsPage onNavigate={setPage}/>;
+  if (page === "auth") return <PageTransition pageKey={page}><AuthPage onBack={() => setPage("home")} onSuccess={() => setPage("dashboard")}/></PageTransition>;
+  if (page === "dashboard") return <PageTransition pageKey={page}><CitizenDashboard onNavigate={setPage}/></PageTransition>;
+  if (page === "report-category") return <PageTransition pageKey={page}><ReportCategoryPage onBack={() => setPage("dashboard")} onContinue={() => setPage("report-evidence")}/></PageTransition>;
+  if (page === "report-evidence") return <PageTransition pageKey={page}><ReportEvidencePage onBack={() => setPage("report-category")} onContinue={() => setPage("report-details")}/></PageTransition>;
+  if (page === "report-details") return <PageTransition pageKey={page}><ReportDetailsPage onBack={() => setPage("report-evidence")} onContinue={() => setPage("complaint-submitted")}/></PageTransition>;
+  if (page === "complaint-submitted") return <PageTransition pageKey={page}><ComplaintSubmittedPage onNavigate={setPage}/></PageTransition>;
+  if (page === "my-complaints") return <PageTransition pageKey={page}><MyComplaintsPage onNavigate={setPage}/></PageTransition>;
+  if (page === "complaint-detail") return <PageTransition pageKey={page}><ComplaintDetailPage onNavigate={setPage}/></PageTransition>;
+  if (page === "proof-of-fix") return <PageTransition pageKey={page}><ProofOfFixPage onNavigate={setPage}/></PageTransition>;
+  if (page === "civic-map") return <PageTransition pageKey={page}><PublicCivicMapPage onNavigate={setPage}/></PageTransition>;
+  if (page === "public-record") return <PageTransition pageKey={page}><PublicComplaintRecordPage onNavigate={setPage}/></PageTransition>;
+  if (page === "verification") return <PageTransition pageKey={page}><VerificationPage onNavigate={setPage}/></PageTransition>;
+  if (page === "leaderboard") return <PageTransition pageKey={page}><LeaderboardPage onNavigate={setPage}/></PageTransition>;
+  if (page === "dept-trust") return <PageTransition pageKey={page}><DeptTrustPage onNavigate={setPage}/></PageTransition>;
+  if (page === "impact-dashboard") return <PageTransition pageKey={page}><ImpactDashboardPage onNavigate={setPage}/></PageTransition>;
+  if (page === "about") return <PageTransition pageKey={page}><AboutPage onNavigate={setPage}/></PageTransition>;
+  if (page === "how-it-works") return <PageTransition pageKey={page}><HowItWorksPage onNavigate={setPage}/></PageTransition>;
+  if (page === "authority-login") return <PageTransition pageKey={page}><AuthorityLoginPage onNavigate={setPage}/></PageTransition>;
+  if (page === "authority-dashboard") return <PageTransition pageKey={page}><AuthorityDashboardPage onNavigate={setPage}/></PageTransition>;
+  if (page === "authority-complaint-queue") return <PageTransition pageKey={page}><AuthorityComplaintQueuePage onNavigate={setPage}/></PageTransition>;
+  if (page === "authority-complaint-detail") return <PageTransition pageKey={page}><AuthorityComplaintDetailPage onNavigate={setPage}/></PageTransition>;
+  if (page === "authority-escalations") return <PageTransition pageKey={page}><AuthorityEscalationsPage onNavigate={setPage}/></PageTransition>;
 
   return (
+    <PageTransition pageKey="home">
     <div style={{ background: "#F5F0E8", color: "#1C0A00", fontFamily: "var(--font-body)", minHeight: "100vh" }}>
 
       {/* ── NAVBAR ── */}
@@ -11891,14 +11893,14 @@ export default function App() {
             {["About", "Features", "Map", "Leaderboard", "How It Works"].map(item => (
               item === "About"
                 ? <button key={item} onClick={() => setPage("about")}
-                    className="font-mono text-xs tracking-widest uppercase opacity-60 hover:opacity-100 transition-opacity"
+                    className="nav-link font-mono text-xs tracking-widest uppercase opacity-60 hover:opacity-100 transition-opacity"
                     style={{ color: "#1C0A00" }}>About</button>
                 : item === "How It Works"
                 ? <button key={item} onClick={() => setPage("how-it-works")}
-                    className="font-mono text-xs tracking-widest uppercase opacity-60 hover:opacity-100 transition-opacity"
+                    className="nav-link font-mono text-xs tracking-widest uppercase opacity-60 hover:opacity-100 transition-opacity"
                     style={{ color: "#1C0A00" }}>How It Works</button>
                 : <a key={item} href={`#${item.toLowerCase().replace(" ", "-")}`}
-                    className="font-mono text-xs tracking-widest uppercase opacity-60 hover:opacity-100 transition-opacity"
+                    className="nav-link font-mono text-xs tracking-widest uppercase opacity-60 hover:opacity-100 transition-opacity"
                     style={{ color: "#1C0A00" }}>{item}</a>
             ))}
           </div>
@@ -11924,7 +11926,7 @@ export default function App() {
 
         {/* Mobile menu */}
         {navOpen && (
-          <div className="md:hidden border-t px-6 py-4 space-y-3" style={{ borderColor: "#C8B89A", background: "#F5F0E8" }}>
+          <div className="drawer-in md:hidden border-t px-6 py-4 space-y-3" style={{ borderColor: "#C8B89A", background: "#F5F0E8" }}>
             {["About", "Features", "Map", "Leaderboard", "How It Works"].map(item => (
               item === "About"
                 ? <button key={item} onClick={() => { setPage("about"); setNavOpen(false); }}
@@ -11947,16 +11949,16 @@ export default function App() {
         <div className="grid md:grid-cols-[1fr_1.4fr] gap-12 items-center">
           <div>
             <SectionLabel>Civic Accountability · Web3 Verified</SectionLabel>
-            <h1 className="font-display font-bold italic leading-tight mb-6" style={{ fontSize: "clamp(2.5rem, 5vw, 4rem)", color: "#1C0A00" }}>
+            <h1 className="rise-in font-display font-bold italic leading-tight mb-6" style={{ fontSize: "clamp(2.5rem, 5vw, 4rem)", color: "#1C0A00" }}>
               A complaint<br/>can be ignored.<br/>
               <span className="not-italic" style={{ color: "#9B3A3A" }}>A verified record</span><br/>cannot.
             </h1>
             <Rule className="mb-6"/>
-            <p className="text-base leading-relaxed mb-8 max-w-md" style={{ color: "#5C4A32", fontFamily: "var(--font-body)" }}>
+            <p className="rise-in rise-d1 text-base leading-relaxed mb-8 max-w-md" style={{ color: "#5C4A32", fontFamily: "var(--font-body)" }}>
               CivicTrace turns civic complaints into transparent, trackable and verifiable public records. Every report. Every resolution. Every proof — permanently recorded.
             </p>
-            <div className="flex flex-wrap gap-3">
-              <button onClick={() => setPage("auth")} className="px-6 py-3 font-mono text-xs tracking-widest uppercase transition-all hover:opacity-90 flex items-center gap-2"
+            <div className="rise-in rise-d2 flex flex-wrap gap-3">
+              <button onClick={() => setPage("auth")} className="btn-primary px-6 py-3 font-mono text-xs tracking-widest uppercase transition-all hover:opacity-90 flex items-center gap-2"
                 style={{ background: "#1C0A00", color: "#F5F0E8", borderRadius: "1px" }}>
                 <span className="w-2 h-2 rounded-full" style={{ background: "#9B3A3A" }}/>
                 Report an Issue
@@ -11968,13 +11970,19 @@ export default function App() {
             </div>
 
             {/* Stats strip */}
-            <div className="flex gap-8 mt-10 pt-8 border-t" style={{ borderColor: "#C8B89A" }}>
-              {[["14,280", "Complaints Filed"], ["91%", "Resolution Rate"], ["0x verified", "On-Chain Records"]].map(([val, label]) => (
-                <div key={label}>
-                  <div className="font-display font-bold text-xl" style={{ color: "#1C0A00" }}>{val}</div>
-                  <div className="font-mono text-xs opacity-50 mt-0.5" style={{ color: "#5C4A32" }}>{label}</div>
-                </div>
-              ))}
+            <div className="rise-in rise-d3 flex gap-8 mt-10 pt-8 border-t" style={{ borderColor: "#C8B89A" }}>
+              <div>
+                <div className="font-display font-bold text-xl" style={{ color: "#1C0A00" }}><AnimatedNumber value={14280} /></div>
+                <div className="font-mono text-xs opacity-50 mt-0.5" style={{ color: "#5C4A32" }}>Complaints Filed</div>
+              </div>
+              <div>
+                <div className="font-display font-bold text-xl" style={{ color: "#1C0A00" }}><AnimatedNumber value={91} format={(n) => `${n}%`} /></div>
+                <div className="font-mono text-xs opacity-50 mt-0.5" style={{ color: "#5C4A32" }}>Resolution Rate</div>
+              </div>
+              <div>
+                <div className="font-display font-bold text-xl" style={{ color: "#1C0A00" }}>0x verified</div>
+                <div className="font-mono text-xs opacity-50 mt-0.5" style={{ color: "#5C4A32" }}>On-Chain Records</div>
+              </div>
             </div>
           </div>
 
@@ -11999,15 +12007,19 @@ export default function App() {
 
       {/* ── FEATURES ── */}
       <section id="features" className="max-w-7xl mx-auto px-6 py-16">
+        <Reveal>
         <div className="text-center mb-12">
           <SectionLabel>Feature Showcase</SectionLabel>
           <h2 className="font-display font-bold italic text-4xl" style={{ color: "#1C0A00" }}>
             Built for accountability.<br/>Designed for trust.
           </h2>
         </div>
+        </Reveal>
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
-          {features.map((f) => (
-            <FeatureCard key={f.title} {...f}/>
+          {features.map((f, i) => (
+            <Reveal key={f.title} delay={Math.min(i, 5) * 70}>
+            <FeatureCard {...f}/>
+            </Reveal>
           ))}
         </div>
       </section>
@@ -12016,6 +12028,7 @@ export default function App() {
 
       {/* ── HOW IT WORKS ── */}
       <section id="how-it-works" className="max-w-7xl mx-auto px-6 py-16">
+        <Reveal>
         <div className="text-center mb-12">
           <SectionLabel>The Process</SectionLabel>
           <h2 className="font-display font-bold italic text-4xl mb-3" style={{ color: "#1C0A00" }}>Report. Track. Verify. Escalate.</h2>
@@ -12023,12 +12036,13 @@ export default function App() {
             A clear, unbreakable chain of civic accountability from first report to verified resolution.
           </p>
         </div>
+        </Reveal>
 
         <div className="grid grid-cols-2 md:grid-cols-4 gap-8 relative">
-          <ProcessStep num="1" title="Report" desc="Citizen submits evidence, location, and description of the civic issue."/>
-          <ProcessStep num="2" title="Track" desc="Follow the complaint lifecycle in real-time with status updates."/>
-          <ProcessStep num="3" title="Verify" desc="Check proof of resolution — evidence submitted by authorities."/>
-          <ProcessStep num="4" title="Escalate" isLast desc="Unresolved issues automatically escalate to higher authorities."/>
+          <Reveal delay={0}><ProcessStep num="1" title="Report" desc="Citizen submits evidence, location, and description of the civic issue."/></Reveal>
+          <Reveal delay={80}><ProcessStep num="2" title="Track" desc="Follow the complaint lifecycle in real-time with status updates."/></Reveal>
+          <Reveal delay={160}><ProcessStep num="3" title="Verify" desc="Check proof of resolution — evidence submitted by authorities."/></Reveal>
+          <Reveal delay={240}><ProcessStep num="4" title="Escalate" isLast desc="Unresolved issues automatically escalate to higher authorities."/></Reveal>
         </div>
 
         {/* Connecting illustration */}
@@ -12045,6 +12059,7 @@ export default function App() {
 
       {/* ── CIVIC MAP SECTION ── */}
       <section id="map" className="max-w-7xl mx-auto px-6 py-16">
+        <Reveal>
         <div className="grid md:grid-cols-[1fr_2fr] gap-10 items-start">
           <div>
             <SectionLabel>Civic Map</SectionLabel>
@@ -12066,9 +12081,10 @@ export default function App() {
               Explore Civic Map
             </button>
           </div>
-          <div onClick={() => setPage("civic-map")} className="border overflow-hidden relative cursor-pointer group" style={{ borderColor: "#C8B89A", borderRadius: "2px" }}>
+          <div onClick={() => setPage("civic-map")} className="card-lift border overflow-hidden relative cursor-pointer group" style={{ borderColor: "#C8B89A", borderRadius: "2px" }}>
             <CivicMap/>
-            <div className="absolute top-3 right-3 px-3 py-1.5 border font-mono text-xs" style={{ borderColor: "#C8B89A", background: "rgba(245,240,232,0.9)", color: "#5C4A32" }}>
+            <div className="absolute top-3 right-3 px-3 py-1.5 border font-mono text-xs flex items-center gap-2" style={{ borderColor: "#C8B89A", background: "rgba(245,240,232,0.9)", color: "#5C4A32" }}>
+              <span className="live-dot w-1.5 h-1.5 rounded-full inline-block" style={{ background: "#4A7C5F" }}/>
               LIVE · 56 ISSUES
             </div>
             <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity" style={{ background: "rgba(28,10,0,0.35)" }}>
@@ -12076,12 +12092,14 @@ export default function App() {
             </div>
           </div>
         </div>
+        </Reveal>
       </section>
 
       <Rule className="max-w-7xl mx-auto px-6"/>
 
       {/* ── CIVIC IMPACT SCORE ── */}
       <section className="max-w-7xl mx-auto px-6 py-16">
+        <Reveal>
         <div className="grid md:grid-cols-2 gap-12 items-center">
           <div>
             <SectionLabel>Civic Impact Assessment</SectionLabel>
@@ -12099,8 +12117,8 @@ export default function App() {
                     <span className="font-mono text-xs opacity-60" style={{ color: "#5C4A32" }}>{label}</span>
                     <span className="font-mono text-xs font-bold" style={{ color: "#1C0A00" }}>{val}</span>
                   </div>
-                  <div className="w-full h-1.5 rounded-full" style={{ background: "#EDE5D4" }}>
-                    <div className="h-full rounded-full" style={{ width: `${val as number}%`, background: "#9B3A3A" }}/>
+                  <div className="w-full h-1.5 rounded-full overflow-hidden" style={{ background: "#EDE5D4" }}>
+                    <div className="h-full rounded-full bar-fill" style={{ width: `${val as number}%`, background: "#9B3A3A" }}/>
                   </div>
                 </div>
               ))}
@@ -12110,12 +12128,14 @@ export default function App() {
             <CivicImpactCard/>
           </div>
         </div>
+        </Reveal>
       </section>
 
       <Rule className="max-w-7xl mx-auto px-6"/>
 
       {/* ── BLOCKCHAIN VERIFICATION ── */}
       <section className="max-w-7xl mx-auto px-6 py-16">
+        <Reveal>
         <div className="grid md:grid-cols-2 gap-12 items-center">
           <div className="flex justify-center md:justify-start">
             <BlockchainRecord onNavigate={setPage}/>
@@ -12145,12 +12165,14 @@ export default function App() {
             </div>
           </div>
         </div>
+        </Reveal>
       </section>
 
       <Rule className="max-w-7xl mx-auto px-6"/>
 
       {/* ── LEADERBOARD ── */}
       <section id="leaderboard" className="max-w-7xl mx-auto px-6 py-16">
+        <Reveal>
         <div className="text-center mb-10">
           <SectionLabel>Department Accountability</SectionLabel>
           <h2 className="font-display font-bold italic text-4xl mb-3" style={{ color: "#1C0A00" }}>Who is actually fixing the city?</h2>
@@ -12158,8 +12180,10 @@ export default function App() {
             Departments are ranked by resolution speed, evidence compliance, and reopen rate — computed weekly.
           </p>
         </div>
+        </Reveal>
 
-        <div className="border overflow-hidden" style={{ borderColor: "#C8B89A", borderRadius: "2px" }}>
+        <Reveal delay={80}>
+        <div className="card-lift border overflow-hidden" style={{ borderColor: "#C8B89A", borderRadius: "2px" }}>
           {/* Header row */}
           <div className="grid py-3 px-5 border-b" style={{
             gridTemplateColumns: "2.5rem 1fr 1fr 1fr 1fr 3rem",
@@ -12178,7 +12202,8 @@ export default function App() {
         </div>
 
         {/* Trust score breakdown */}
-        <div className="mt-10 border p-6" style={{ background: "#FAF7F2", borderColor: "#C8B89A", borderRadius: "2px" }}>
+        <Reveal delay={120}>
+        <div className="card-lift mt-10 border p-6" style={{ background: "#FAF7F2", borderColor: "#C8B89A", borderRadius: "2px" }}>
           <div className="grid md:grid-cols-2 gap-8 items-center">
             <div>
               <SectionLabel>Trust Score Breakdown</SectionLabel>
@@ -12193,8 +12218,8 @@ export default function App() {
                     <span className="font-mono text-xs opacity-60" style={{ color: "#5C4A32" }}>{label}</span>
                     <span className="font-mono text-xs font-bold" style={{ color: "#1C0A00" }}>{val}</span>
                   </div>
-                  <div className="w-full h-1" style={{ background: "#EDE5D4" }}>
-                    <div className="h-full" style={{ width: `${val as number}%`, background: "#4A7C5F" }}/>
+                  <div className="w-full h-1 overflow-hidden" style={{ background: "#EDE5D4" }}>
+                    <div className="h-full bar-fill" style={{ width: `${val as number}%`, background: "#4A7C5F" }}/>
                   </div>
                 </div>
               ))}
@@ -12215,12 +12240,15 @@ export default function App() {
             </div>
           </div>
         </div>
+        </Reveal>
+        </Reveal>
       </section>
 
       <Rule className="max-w-7xl mx-auto px-6"/>
 
       {/* ── CITIZEN DASHBOARD PREVIEW ── */}
       <section className="max-w-7xl mx-auto px-6 py-16">
+        <Reveal>
         <div className="grid md:grid-cols-[1fr_2fr] gap-10 items-start">
           <div>
             <SectionLabel>Citizen Dashboard</SectionLabel>
@@ -12238,15 +12266,17 @@ export default function App() {
             </div>
           </div>
           <div className="space-y-4">
-            {complaints.map(c => <ComplaintCard key={c.id} {...c} onNavigate={setPage}/>)}
+            {complaints.map((c, i) => <Reveal key={c.id} delay={Math.min(i, 4) * 80}><ComplaintCard {...c} onNavigate={setPage}/></Reveal>)}
           </div>
         </div>
+        </Reveal>
       </section>
 
       <Rule className="max-w-7xl mx-auto px-6"/>
 
       {/* ── CTA ── */}
       <section className="max-w-7xl mx-auto px-6 py-20 text-center">
+        <Reveal>
         <SectionLabel>Join the Record</SectionLabel>
         <h2 className="font-display font-bold italic text-5xl mb-4" style={{ color: "#1C0A00" }}>
           Your city.<br/>Your record.<br/><span style={{ color: "#9B3A3A" }}>Your proof.</span>
@@ -12255,16 +12285,17 @@ export default function App() {
           Every unresolved pothole, every burst pipe, every broken streetlight — now has a permanent, verifiable record.
         </p>
         <div className="flex flex-wrap gap-4 justify-center">
-          <button onClick={() => setPage("auth")} className="px-8 py-4 font-mono text-xs tracking-widest uppercase flex items-center gap-2 hover:opacity-90 transition-opacity"
+          <button onClick={() => setPage("auth")} className="btn-primary px-8 py-4 font-mono text-xs tracking-widest uppercase flex items-center gap-2 hover:opacity-90 transition-opacity"
             style={{ background: "#1C0A00", color: "#F5F0E8", borderRadius: "1px" }}>
             <span className="w-2 h-2 rounded-full" style={{ background: "#9B3A3A" }}/>
             Report an Issue
           </button>
-          <button onClick={() => setPage("civic-map")} className="px-8 py-4 border font-mono text-xs tracking-widest uppercase hover:bg-[#EDE5D4] transition-colors"
+          <button onClick={() => setPage("civic-map")} className="btn-press px-8 py-4 border font-mono text-xs tracking-widest uppercase hover:bg-[#EDE5D4] transition-colors"
             style={{ borderColor: "#1C0A00", color: "#1C0A00", borderRadius: "1px" }}>
             Explore Civic Map
           </button>
         </div>
+        </Reveal>
       </section>
 
       {/* ── FOOTER ── */}
@@ -12315,12 +12346,13 @@ export default function App() {
           <div className="flex flex-wrap items-center justify-between gap-4 mt-6">
             <div className="font-mono text-xs opacity-40" style={{ color: "#5C4A32" }}>© 2026 CivicTrace. All civic records preserved.</div>
             <div className="font-mono text-xs opacity-40 flex items-center gap-2" style={{ color: "#5C4A32" }}>
-              <span className="w-1.5 h-1.5 rounded-full" style={{ background: "#4A7C5F" }}/>
+              <span className="live-dot w-1.5 h-1.5 rounded-full" style={{ background: "#4A7C5F" }}/>
               On-chain · Verified · Open
             </div>
           </div>
         </div>
       </footer>
     </div>
+    </PageTransition>
   );
 }

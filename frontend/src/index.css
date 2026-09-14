@@ -66,11 +66,15 @@ body::before {
 
 /* Card hover lift */
 .card-lift {
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  transition: transform 0.22s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.22s cubic-bezier(0.22, 1, 0.36, 1), border-color 0.22s ease;
+  will-change: transform;
 }
 .card-lift:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 8px 32px rgba(28,10,0,0.12);
+  transform: translateY(-3px);
+  box-shadow: 0 10px 32px rgba(28,10,0,0.12);
+}
+.card-lift:active {
+  transform: translateY(-1px) scale(0.995);
 }
 
 /* Pulse animation for map markers */
@@ -107,4 +111,223 @@ body::before {
   50% { box-shadow: 0 0 12px 3px rgba(74,124,95,0.25); }
 }
 .verify-glow { animation: verify-glow 2.5s ease-in-out infinite; }
+
+/* ══════════════════════════════════════════════════════════════════
+   CivicTrace Motion System — professional, calm, citizen-friendly
+   Distances small (12–20px) · durations fast (180–450ms) ·
+   one easing curve everywhere: expo-out.
+   ══════════════════════════════════════════════════════════════════ */
+:root {
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --dur-fast: 180ms;
+  --dur-med: 320ms;
+  --dur-slow: 450ms;
+}
+
+/* ── Page enter: every route fades + rises once ── */
+@keyframes page-in {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.page-enter {
+  animation: page-in var(--dur-slow) var(--ease-out) both;
+}
+
+/* ── Scroll reveal (toggled by <Reveal/>) ── */
+.reveal {
+  opacity: 0;
+  transform: translateY(var(--reveal-y, 16px));
+  transition:
+    opacity var(--dur-med) var(--ease-out),
+    transform var(--dur-med) var(--ease-out);
+  will-change: opacity, transform;
+}
+.reveal-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+.stagger-item { display: block; }
+
+/* ── Buttons: global press physics + sheen on primary ── */
+button {
+  transition: transform 120ms var(--ease-out), opacity var(--dur-fast) ease,
+    background-color var(--dur-fast) ease, box-shadow var(--dur-fast) ease;
+}
+button:active:not(:disabled) { transform: scale(0.97); }
+button:disabled { cursor: not-allowed; }
+
+.btn-primary {
+  position: relative;
+  overflow: hidden;
+}
+.btn-primary::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(105deg, transparent 40%, rgba(245, 240, 232, 0.18) 50%, transparent 60%);
+  transform: translateX(-120%);
+  transition: transform 600ms var(--ease-out);
+  pointer-events: none;
+}
+.btn-primary:hover::after { transform: translateX(120%); }
+
+.btn-press:active:not(:disabled) { transform: scale(0.96); }
+
+/* ── Inputs: calm focus ring in palette ── */
+input, textarea, select {
+  transition: border-color var(--dur-fast) ease, box-shadow var(--dur-fast) ease, background-color var(--dur-fast) ease;
+}
+input:focus, textarea:focus, select:focus {
+  border-color: #1C0A00 !important;
+  box-shadow: 0 0 0 3px rgba(28, 10, 0, 0.08);
+  outline: none;
+}
+
+/* ── Nav underline sweep ── */
+.nav-link { position: relative; }
+.nav-link::after {
+  content: "";
+  position: absolute;
+  left: 0; right: 0; bottom: -4px;
+  height: 1px;
+  background: #1C0A00;
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 250ms var(--ease-out);
+}
+.nav-link:hover::after { transform: scaleX(1); }
+
+/* ── Mobile drawer ── */
+@keyframes drawer-in {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.drawer-in { animation: drawer-in 240ms var(--ease-out) both; }
+
+/* ── Modal / popover pop ── */
+@keyframes pop-in {
+  from { opacity: 0; transform: translateY(10px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.modal-pop { animation: pop-in 280ms var(--ease-out) both; }
+@keyframes overlay-in { from { opacity: 0; } to { opacity: 1; } }
+.overlay-in { animation: overlay-in 200ms ease-out both; }
+
+/* ── Toast slide ── */
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(12px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.toast-in { animation: toast-in 300ms var(--ease-out) both; }
+
+/* ── Success check draw ── */
+@keyframes check-draw {
+  from { stroke-dashoffset: 24; }
+  to { stroke-dashoffset: 0; }
+}
+.check-draw {
+  stroke-dasharray: 24;
+  stroke-dashoffset: 24;
+  animation: check-draw 500ms var(--ease-out) 150ms forwards;
+}
+@keyframes seal-pop {
+  0% { opacity: 0; transform: scale(0.6); }
+  60% { opacity: 1; transform: scale(1.06); }
+  100% { opacity: 1; transform: scale(1); }
+}
+.seal-pop { animation: seal-pop 450ms var(--ease-out) both; transform-origin: center; }
+
+/* ── Progress / trust bars fill on view ── */
+.bar-fill {
+  transform-origin: left;
+  animation: bar-grow 900ms var(--ease-out) both;
+}
+@keyframes bar-grow {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+
+/* ── Map pins: gentle drop-in, staggered via inline delay ── */
+@keyframes pin-drop {
+  0% { opacity: 0; transform: translateY(-10px) scale(0.7); }
+  60% { opacity: 1; transform: translateY(1px) scale(1.05); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+.pin-drop {
+  animation: pin-drop 450ms var(--ease-out) both;
+  transform-box: fill-box;
+  transform-origin: center bottom;
+}
+
+/* ── Live dot: soft ping for LIVE badges ── */
+@keyframes live-ping {
+  0% { box-shadow: 0 0 0 0 rgba(74, 124, 95, 0.45); }
+  70% { box-shadow: 0 0 0 7px rgba(74, 124, 95, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(74, 124, 95, 0); }
+}
+.live-dot { animation: live-ping 2s ease-out infinite; }
+
+/* ── Skeleton shimmer for loading states ── */
+@keyframes shimmer {
+  from { background-position: -400px 0; }
+  to { background-position: 400px 0; }
+}
+.skeleton {
+  background: linear-gradient(90deg, #EDE5D4 25%, #F5F0E8 50%, #EDE5D4 75%);
+  background-size: 800px 100%;
+  animation: shimmer 1.4s linear infinite;
+  border-radius: 2px;
+}
+
+/* ── Spinner (button loading) ── */
+@keyframes spin-once { to { transform: rotate(360deg); } }
+.spinner { animation: spin-once 800ms linear infinite; }
+
+/* ── Step dots / timeline dot entrance ── */
+@keyframes dot-in {
+  from { opacity: 0; transform: scale(0.5); }
+  to { opacity: 1; transform: scale(1); }
+}
+.dot-in { animation: dot-in 300ms var(--ease-out) both; }
+
+/* ── Hero headline: calm word-rise ── */
+@keyframes rise-in {
+  from { opacity: 0; transform: translateY(18px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.rise-in { animation: rise-in 600ms var(--ease-out) both; }
+.rise-d1 { animation-delay: 80ms; }
+.rise-d2 { animation-delay: 160ms; }
+.rise-d3 { animation-delay: 240ms; }
+
+/* ── Gentle float for illustration accents (very subtle) ── */
+@keyframes float-soft {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-5px); }
+}
+.float-soft { animation: float-soft 5s ease-in-out infinite; }
+
+/* ── Status badge: quiet entrance ── */
+@keyframes badge-in {
+  from { opacity: 0; transform: scale(0.92); }
+  to { opacity: 1; transform: scale(1); }
+}
+.badge-in { animation: badge-in 250ms var(--ease-out) both; }
+
+/* ── Focus visibility for keyboard users ── */
+:focus-visible {
+  outline: 2px solid #1C0A00;
+  outline-offset: 2px;
+}
+
+/* ── Respect users who prefer no motion ── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  .reveal { opacity: 1; transform: none; }
+  .page-enter { animation: none; }
+}
 
