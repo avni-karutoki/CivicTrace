@@ -4,6 +4,26 @@ import { supabase } from "../supabase.js";
 import { asyncHandler } from "../asyncHandler.js";
 import { findLikelyDuplicate, bumpPriority } from "../dedup.js";
 import { appendStatusEvent, verifyChain, sha256Hex } from "../hashchain.js";
+import { anchorStatusEvent, verifyOnchain, explorerTxUrl, isOnchainEnabled } from "../onchain.js";
+
+// Best-effort anchor saver: ignores missing-column errors so old DBs keep working.
+async function trySaveAnchor({ eventId, complaintId, txHash, chainId }) {
+  if (!txHash) return;
+  try {
+    await supabase.from("status_events").update({ tx_hash: txHash, chain_id: chainId ?? null }).eq("id", eventId);
+  } catch { /* column may not exist yet — run migration_add_anchor.sql */ }
+  try {
+    await supabase.from("complaints").update({ anchor_tx: txHash, anchor_chain_id: chainId ?? null }).eq("id", complaintId);
+  } catch { /* ignore */ }
+}
+
+// Fire-and-forget so API latency is unchanged when chain is slow/off.
+function anchorInBackground({ event, complaintId, trackingCode, fromStatus, toStatus }) {
+  if (!isOnchainEnabled()) return;
+  anchorStatusEvent({ complaintId, trackingCode, fromStatus, toStatus, thisHash: event?.thisHash })
+    .then((r) => { if (r?.txHash) trySaveAnchor({ eventId: event?.id, complaintId, txHash: r.txHash, chainId: r.chainId }); })
+    .catch(() => {});
+}
 
 const router = Router();
 
@@ -83,7 +103,7 @@ router.post("/", requireUser, async (req, res) => {
         if (evError) throw evError;
       }
 
-      await appendStatusEvent({
+      const mergeEvent = await appendStatusEvent({
         complaintId: complaint.id,
         fromStatus: complaint.status,
         toStatus: complaint.status,
@@ -91,6 +111,7 @@ router.post("/", requireUser, async (req, res) => {
         actorRole: "citizen",
         note: `Duplicate report merged (support_count -> ${newSupportCount}), priority -> ${newPriority}`,
       });
+      anchorInBackground({ event: mergeEvent, complaintId: complaint.id, trackingCode: complaint.tracking_code, fromStatus: complaint.status, toStatus: complaint.status });
 
       const { data: updated, error: fetchError } = await supabase
         .from("complaints")
@@ -142,7 +163,7 @@ router.post("/", requireUser, async (req, res) => {
       if (evError) throw evError;
     }
 
-    await appendStatusEvent({
+    const filedEvent = await appendStatusEvent({
       complaintId: id,
       fromStatus: null,
       toStatus: "REPORTED",
@@ -150,6 +171,7 @@ router.post("/", requireUser, async (req, res) => {
       actorRole: "citizen",
       note: "Complaint filed",
     });
+    anchorInBackground({ event: filedEvent, complaintId: id, trackingCode, fromStatus: "", toStatus: "REPORTED" });
 
     const { data: created, error: fetchError } = await supabase
       .from("complaints")
@@ -279,6 +301,7 @@ router.post("/:id/status", requireUser, async (req, res) => {
       actorRole: req.user.role,
       note,
     });
+    anchorInBackground({ event, complaintId: complaint.id, trackingCode: complaint.tracking_code, fromStatus: complaint.status, toStatus });
 
     res.json({ ok: true, event });
   } catch (e) {
@@ -327,6 +350,7 @@ router.post("/:id/proof-of-fix", requireUser, async (req, res) => {
       actorRole: req.user.role,
       note: "Proof of fix uploaded",
     });
+    anchorInBackground({ event, complaintId: complaint.id, trackingCode: complaint.tracking_code, fromStatus: complaint.status, toStatus: "RESOLVED" });
 
     res.json({ ok: true, event });
   } catch (e) {
@@ -365,6 +389,7 @@ router.post("/:id/dispute", requireUser, async (req, res) => {
       actorRole: "citizen",
       note: req.body?.reason || "Citizen reports issue not actually fixed",
     });
+    anchorInBackground({ event, complaintId: complaint.id, trackingCode: complaint.tracking_code, fromStatus: complaint.status, toStatus: "DISPUTED" });
 
     res.json({ ok: true, event });
   } catch (e) {
@@ -373,6 +398,7 @@ router.post("/:id/dispute", requireUser, async (req, res) => {
 });
 
 // GET /complaints/:id/verification — full hash-chain history for the judge-facing page
+// Additive: includes `onchain` only when ONCHAIN_ENABLED; old clients ignore it.
 router.get("/:id/verification", asyncHandler(async (req, res) => {
   const { data: complaint, error } = await supabase
     .from("complaints")
@@ -382,7 +408,33 @@ router.get("/:id/verification", asyncHandler(async (req, res) => {
   if (error) return res.status(500).json({ error: error.message });
   if (!complaint) return res.status(404).json({ error: "not found" });
   const chain = await verifyChain(req.params.id);
-  res.json({ complaint: toAuthorityView(complaint), chain_valid: chain.valid, events: chain.events });
+  let onchain = { enabled: false };
+  try {
+    if (isOnchainEnabled() && chain.events?.length) {
+      const latest = chain.events[chain.events.length - 1];
+      const v = await verifyOnchain(req.params.id, latest.this_hash);
+      onchain = {
+        ...v,
+        txUrl: latest.tx_hash ? explorerTxUrl(latest.tx_hash) : (complaint.anchor_tx ? explorerTxUrl(complaint.anchor_tx) : null),
+        anchorTx: latest.tx_hash || complaint.anchor_tx || null,
+      };
+    } else if (complaint.anchor_tx) {
+      onchain = { enabled: true, anchorTx: complaint.anchor_tx, txUrl: explorerTxUrl(complaint.anchor_tx) };
+    }
+  } catch { /* keep off-chain verification authoritative */ }
+  res.json({ complaint: toAuthorityView(complaint), chain_valid: chain.valid, events: chain.events, onchain });
+}));
+
+// POST /complaints/:id/anchor — manually anchor latest event (demo helper, no-op when disabled)
+router.post("/:id/anchor", requireUser, asyncHandler(async (req, res) => {
+  if (!isOnchainEnabled()) return res.json({ enabled: false, message: "ONCHAIN_ENABLED != true; off-chain record unchanged" });
+  const chain = await verifyChain(req.params.id);
+  if (!chain.events?.length) return res.status(404).json({ error: "no events to anchor" });
+  const latest = chain.events[chain.events.length - 1];
+  const { data: complaint } = await supabase.from("complaints").select("tracking_code").eq("id", req.params.id).maybeSingle();
+  const r = await anchorStatusEvent({ complaintId: req.params.id, trackingCode: complaint?.tracking_code || "", fromStatus: latest.from_status || "", toStatus: latest.to_status, thisHash: latest.this_hash });
+  if (r?.txHash) await trySaveAnchor({ eventId: latest.id, complaintId: req.params.id, txHash: r.txHash, chainId: r.chainId });
+  res.json({ enabled: true, txHash: r?.txHash || null, txUrl: r?.txHash ? explorerTxUrl(r.txHash) : null });
 }));
 
 export default router;

@@ -91,6 +91,21 @@ export interface BackendStatusEvent {
   created_at: string;
   link_ok?: boolean;
   hash_ok?: boolean;
+  // Additive Web3 fields — absent until migration + ONCHAIN_ENABLED.
+  tx_hash?: string | null;
+  chain_id?: number | null;
+}
+
+export interface VerificationOnchain {
+  enabled: boolean;
+  match?: boolean;
+  contract?: string | null;
+  chainId?: number | null;
+  explorer?: string | null;
+  onchainHash?: string | null;
+  anchorTx?: string | null;
+  txUrl?: string | null;
+  error?: string;
 }
 
 export interface LeaderboardRow {
@@ -144,7 +159,7 @@ export const api = {
 
   dispute: (id: string, reason?: string) => post(`/complaints/${id}/dispute`, { reason }),
 
-  verification: (id: string): Promise<{ complaint: BackendComplaint; chain_valid: boolean; events: BackendStatusEvent[] }> =>
+  verification: (id: string): Promise<{ complaint: BackendComplaint; chain_valid: boolean; events: BackendStatusEvent[]; onchain?: VerificationOnchain }> =>
     apiFetch(`/complaints/${id}/verification`),
 
   leaderboard: (): Promise<LeaderboardRow[]> => apiFetch("/leaderboard"),

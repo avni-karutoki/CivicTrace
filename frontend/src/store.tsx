@@ -278,12 +278,12 @@ export function useLiveDepartments() {
 }
 
 export function useLiveVerification(complaintId: string | null) {
-  const [state, setState] = useState<{ valid: boolean; events: import("./api/civictrace").BackendStatusEvent[]; complaint: BackendComplaint | null } | null>(null);
+  const [state, setState] = useState<{ valid: boolean; events: import("./api/civictrace").BackendStatusEvent[]; complaint: BackendComplaint | null; onchain?: import("./api/civictrace").VerificationOnchain } | null>(null);
   useEffect(() => {
     if (!complaintId) { setState(null); return; }
     let cancelled = false;
     api.verification(complaintId)
-      .then((v) => { if (!cancelled) setState({ valid: v.chain_valid, events: v.events, complaint: v.complaint }); })
+      .then((v) => { if (!cancelled) setState({ valid: v.chain_valid, events: v.events, complaint: v.complaint, onchain: v.onchain }); })
       .catch(() => { if (!cancelled) setState(null); });
     return () => { cancelled = true; };
   }, [complaintId]);

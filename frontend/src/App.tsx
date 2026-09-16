@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { useCivic, useLiveComplaints, useLiveLeaderboard, useLiveMyComplaints, useLiveNotifications, useLiveVerification } from "./store";
 import { PageTransition, Reveal, AnimatedNumber } from "./motion";
 import { api, CATEGORY_LABELS, PRIORITY_UI, STATUS_UI, timeAgo, daysOpen, toCardComplaint } from "./api/civictrace";
+import { getOnchainStatus } from "./api/onchain";
 import type { BackendComplaint } from "./api/civictrace";
 
 // ─── Page Router ─────────────────────────────────────────────────────────────
@@ -165,7 +166,8 @@ function AuthPage({ onBack, onSuccess }: { onBack: () => void; onSuccess?: () =>
     setLoading(true);
     setLoginErr("");
     const contact = method === "email" ? email.trim() : phone.trim();
-    const displayName = name.trim() || contact || "Citizen";
+    // Use name from signup form, otherwise let backend return stored name
+    const displayName = mode === "signup" ? name.trim() : contact || "Citizen";
     // Best-effort backend login (demo auth, no OTP server-side). Always
     // continue so the demo works even when the backend is unreachable.
     const ok = await civic.login(displayName, contact || "guest@civictrace.local", "citizen").catch(() => false);
@@ -2186,7 +2188,7 @@ function ReportEvidencePage({ onBack, onContinue }: { onBack: () => void; onCont
                     style={{ background: "rgba(245,240,232,0.92)", borderColor: "#C8B89A", borderRadius: "1px" }}>
                     <div className="w-1.5 h-1.5 rounded-full" style={{ background: "#4A7C5F" }}/>
                     <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.55rem", letterSpacing: "0.08em", color: "#1C0A00" }}>
-                      13 SEP 2026 · 10:42 IST
+                      {new Date().toLocaleString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" }).replace(",", " ·")} IST
                     </span>
                   </div>
                   <div className="absolute top-3 right-3 px-2.5 py-1.5 border"
@@ -3010,12 +3012,13 @@ function ComplaintSubmittedPage({ onNavigate }: { onNavigate: (p: Page) => void 
   ];
 
   // Summary rows — correct complaint data per brief
+  const now = new Date();
   const summaryRows: { label: string; value: string; valueStyle: React.CSSProperties }[] = [
     { label: "Issue",     value: civic.draft.summary || "Major Pothole",              valueStyle: {} },
     { label: "Category",  value: civic.draft.categoryLabel || "Roads & Infrastructure",     valueStyle: {} },
     { label: "Priority",  value: civic.draft.priorityLabel?.toUpperCase() || "URGENT",                     valueStyle: { color: "#C4622D", fontFamily: "var(--font-mono)", fontSize: "0.7rem", letterSpacing: "0.08em" } },
     { label: "Location",  value: "Sector X, New Delhi",        valueStyle: {} },
-    { label: "Submitted", value: "13 Sep 2026 · 14:32 IST",   valueStyle: { fontFamily: "var(--font-mono)", fontSize: "0.74rem" } },
+    { label: "Submitted", value: now.toLocaleString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" }).replace(",", " ·") + " IST",   valueStyle: { fontFamily: "var(--font-mono)", fontSize: "0.74rem" } },
   ];
 
   return (
@@ -4044,39 +4047,52 @@ function MyComplaintsPage({ onNavigate, openDetail = false }: { onNavigate: (p: 
 // ─── PAGE 10 — Complaint Detail ───────────────────────────────────────────────
 function ComplaintDetailPage({ onNavigate }: { onNavigate: (p: Page) => void }) {
   const [supported, setSupported] = useState(false);
-  const [showVerifyToast, setShowVerifyToast] = useState(false);
   const civic = useCivic();
   const live = useLiveVerification(civic.selectedId);
 
-  const triggerToast = () => {
-    setShowVerifyToast(true);
-    setTimeout(() => setShowVerifyToast(false), 2800);
-  };
+  // Use live data or fallback
+  const complaint = live?.complaint;
+  const events = live?.events ?? [];
+  const onchain = live?.onchain;
+  const chainValid = live?.valid;
 
-  const timelineEvents = [
-    { status: "REPORTED",   date: "13 Sep · 14:32", desc: "Citizen submitted the issue with photographic evidence.", done: true },
-    { status: "ASSESSED",   date: "13 Sep · 15:10", desc: "Complaint assessed and priority confirmed.",              done: true },
-    { status: "ASSIGNED",   date: "13 Sep · 16:02", desc: "Assigned to Roads Department, Ward 7.",                  done: true },
-    { status: "IN PROGRESS",date: "14 Sep · 09:20", desc: "Work order raised. Crew deployed to site.",              done: true, current: true },
-    { status: "PROOF SUBMITTED", date: "Upcoming",  desc: "Authority must upload resolution evidence.",             done: false },
-    { status: "RESOLVED",   date: "Upcoming",       desc: "Complaint closed after citizen verification.",           done: false },
+  // Format complaint data for display
+  const displayComplaint = complaint ? {
+    trackingCode: complaint.tracking_code,
+    category: CATEGORY_LABELS[complaint.category] || complaint.category,
+    description: complaint.description || CATEGORY_LABELS[complaint.category] || complaint.category,
+    priority: PRIORITY_UI[complaint.priority] ?? "NORMAL",
+    status: STATUS_UI[complaint.status] ?? complaint.status,
+    lat: complaint.lat,
+    lng: complaint.lng,
+    supportCount: complaint.support_count,
+    createdAt: complaint.created_at,
+    lastActionAt: complaint.last_action_at,
+    departmentId: complaint.department_id,
+  } : null;
+
+  // Build timeline from actual events
+  const timelineEvents = events.length > 0 ? events.map((ev, i) => ({
+    status: STATUS_UI[ev.to_status] ?? ev.to_status,
+    date: timeAgo(ev.created_at),
+    desc: ev.note || `Status updated to ${STATUS_UI[ev.to_status] ?? ev.to_status}`,
+    done: true,
+    current: i === events.length - 1,
+    hash: ev.this_hash,
+    txHash: ev.tx_hash,
+  })) : [
+    { status: "REPORTED", date: displayComplaint ? timeAgo(displayComplaint.createdAt) : "Just now", desc: "Complaint filed", done: true },
   ];
 
-  const statusCfg = STATUS_CONFIG["IN PROGRESS"];
+  const currentStatus = displayComplaint?.status || "REPORTED";
+  const statusCfg = STATUS_CONFIG[currentStatus] || STATUS_CONFIG["REPORTED"];
+
+  const handleViewVerification = () => {
+    onNavigate("verification");
+  };
 
   return (
-    <div style={{ background: "#F5F0E8", minHeight: "100vh", fontFamily: "var(--font-body)" }}>
-
-      {/* Toast */}
-      {showVerifyToast && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-6 py-3 border flex items-center gap-3"
-          style={{ background: "#1C0A00", color: "#F5F0E8", borderColor: "#5C4A32", borderRadius: "2px", fontFamily: "var(--font-mono)", fontSize: "0.6rem", letterSpacing: "0.08em" }}>
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-            <path d="M2 6 L5 9 L10 3" stroke="#4A7C5F" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-          </svg>
-          BLOCKCHAIN PROOF VIEW — COMING SOON
-        </div>
-      )}
+    <div style={{ background: "#F5F0E8", minHeight: "100vh", fontFamily: "var(--font-body)" }>
 
       {/* ── Top bar ── */}
       <div className="sticky top-0 z-40 border-b" style={{ background: "rgba(245,240,232,0.97)", borderColor: "#C8B89A", backdropFilter: "blur(8px)" }}>
@@ -4087,7 +4103,7 @@ function ComplaintDetailPage({ onNavigate }: { onNavigate: (p: Page) => void }) 
             <span className="opacity-40">›</span>
             <button onClick={() => onNavigate("my-complaints")} className="hover:opacity-80 transition-opacity opacity-50">My Complaints</button>
             <span className="opacity-40">›</span>
-            <span style={{ color: "#1C0A00" }}>{civic.selectedCode ?? "CTY-48291-X"}</span>
+            <span style={{ color: "#1C0A00" }}>{displayComplaint?.trackingCode || civic.selectedCode ?? "CTY-48291-X"}</span>
           </div>
           <div className="flex items-center gap-2">
             <CivicTraceLogo size={22}/>
@@ -4114,38 +4130,40 @@ function ComplaintDetailPage({ onNavigate }: { onNavigate: (p: Page) => void }) 
             </div>
             <div className="h-px flex-1" style={{ background: "#C8B89A", opacity: 0.35 }}/>
             <div style={{ fontFamily: "var(--font-mono)", fontSize: "0.58rem", letterSpacing: "0.1em", color: "#3A6B9B", opacity: 0.7 }}>
-              CTY-48291-X
+              {displayComplaint?.trackingCode || "CTY-48291-X"}
             </div>
           </div>
 
           <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4">
             <div>
               <div style={{ fontFamily: "var(--font-mono)", fontSize: "0.62rem", letterSpacing: "0.1em", color: "#3A6B9B", marginBottom: 4 }}>
-                Complaint #CTY-48291-X
+                Complaint #{displayComplaint?.trackingCode || "CTY-48291-X"}
               </div>
               <h1 style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontStyle: "italic", fontSize: "clamp(2rem, 4vw, 3rem)", color: "#1C0A00", lineHeight: 1.05 }}>
-                Major Pothole
+                {displayComplaint?.description || "Major Pothole"}
               </h1>
               <div className="flex items-center gap-2 mt-3 flex-wrap">
-                <PriorityBadge priority="URGENT"/>
-                <StatusBadge2 status="IN PROGRESS"/>
-                <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.52rem", color: "#5C4A32", opacity: 0.4 }}>
-                  · 3 days unresolved
-                </span>
+                <PriorityBadge priority={displayComplaint?.priority || "URGENT"}/>
+                <StatusBadge2 status={currentStatus}/>
+                {displayComplaint && (
+                  <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.52rem", color: "#5C4A32", opacity: 0.4 }}>
+                    · {daysOpen(displayComplaint.createdAt)} days unresolved
+                  </span>
+                )}
               </div>
             </div>
 
             {/* Actions top-right */}
             <div className="flex flex-col gap-2 md:items-end">
-              <button onClick={triggerToast}
+              <button onClick={handleViewVerification}
                 className="px-5 py-2.5 hover:opacity-90 transition-opacity"
                 style={{ background: "#1C0A00", color: "#F5F0E8", borderRadius: "1px",
                   fontFamily: "var(--font-mono)", fontSize: "0.6rem", letterSpacing: "0.1em", textTransform: "uppercase" }}>
                 View Verification Record
               </button>
               <button onClick={() => {
-                if (live?.complaint && !supported) {
-                  api.createComplaint({ category: live.complaint.category, lat: live.complaint.lat, lng: live.complaint.lng, description: "Supporting this report" }).catch(() => {});
+                if (complaint && !supported) {
+                  api.createComplaint({ category: complaint.category, lat: complaint.lat, lng: complaint.lng, description: "Supporting this report" }).catch(() => {});
                 }
                 setSupported(s => !s);
               }}
@@ -4218,36 +4236,44 @@ function ComplaintDetailPage({ onNavigate }: { onNavigate: (p: Page) => void }) 
                   {/* Measurement tape illustration */}
                   <rect x="430" y="165" width="80" height="12" rx="2" fill="#F5C842" opacity="0.85"/>
                   <text x="470" y="175" textAnchor="middle" fill="#1C0A00" fontSize="8" fontFamily="monospace" fontWeight="bold">1.8m</text>
-                  {/* Timestamp overlay */}
-                  <rect x="12" y="12" width="180" height="22" fill="rgba(0,0,0,0.65)" rx="1"/>
-                  <text x="22" y="27" fill="#F5F0E8" fontSize="9" fontFamily="monospace" opacity="0.9">13 SEP 2026 · 14:32:04</text>
-                  {/* GPS overlay */}
-                  <rect x="12" y="38" width="160" height="18" fill="rgba(0,0,0,0.55)" rx="1"/>
-                  <text x="22" y="51" fill="#9BD49B" fontSize="9" fontFamily="monospace" opacity="0.85">GPS 28.6139°N 77.2090°E</text>
+                  {/* Timestamp overlay - use live data */}
+                  <rect x="12" y="12" width="200" height="22" fill="rgba(0,0,0,0.65)" rx="1"/>
+                  <text x="22" y="27" fill="#F5F0E8" fontSize="9" fontFamily="monospace" opacity="0.9">
+                    {displayComplaint
+                      ? new Date(displayComplaint.createdAt).toLocaleString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit", timeZone: "Asia/Kolkata" }).replace(",", " ·")
+                      : "13 SEP 2026 · 14:32:04"}
+                  </text>
+                  {/* GPS overlay - use live data */}
+                  <rect x="12" y="38" width="180" height="18" fill="rgba(0,0,0,0.55)" rx="1"/>
+                  <text x="22" y="51" fill="#9BD49B" fontSize="9" fontFamily="monospace" opacity="0.85">
+                    GPS {displayComplaint?.lat?.toFixed(4) || "28.6139"}°N {displayComplaint?.lng?.toFixed(4) || "77.2090"}°E
+                  </text>
                   {/* CivicTrace watermark */}
                   <text x="790" y="252" textAnchor="end" fill="white" fontSize="9" fontFamily="monospace" opacity="0.3">CivicTrace · Evidence Record</text>
                   {/* Corner notch decoration */}
                   <path d="M0 0 L40 0 L0 40 Z" fill="rgba(28,10,0,0.4)"/>
                 </svg>
 
-                {/* Hash overlay bottom */}
+                {/* Hash overlay bottom - use live data */}
                 <div className="absolute bottom-0 left-0 right-0 px-4 py-2 flex items-center justify-between"
                   style={{ background: "rgba(28,10,0,0.75)", backdropFilter: "blur(4px)" }}>
                   <div style={{ fontFamily: "var(--font-mono)", fontSize: "0.55rem", color: "#C8B89A", letterSpacing: "0.07em" }}>
                     SHA-256 Fingerprint
                   </div>
                   <div style={{ fontFamily: "var(--font-mono)", fontSize: "0.6rem", color: "#6AABDB", letterSpacing: "0.05em" }}>
-                    0x4f91a2…d8c3e7b1
+                    {events.length > 0 && events[events.length - 1].this_hash
+                      ? `0x${events[events.length - 1].this_hash.slice(0, 6)}…${events[events.length - 1].this_hash.slice(-6)}`
+                      : "0x4f91a2…d8c3e7b1"}
                   </div>
                 </div>
               </div>
 
-              {/* Evidence metadata */}
+              {/* Evidence metadata - use live data */}
               <div className="px-6 py-4 grid grid-cols-3 gap-4">
                 {[
-                  { label: "Captured", value: "13 Sep 2026 · 14:32" },
-                  { label: "Location", value: "Sector X, New Delhi" },
-                  { label: "Evidence Integrity", value: "✓ Recorded" },
+                  { label: "Captured", value: displayComplaint ? new Date(displayComplaint.createdAt).toLocaleString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" }).replace(",", " ·") : "13 Sep 2026 · 14:32" },
+                  { label: "Location", value: displayComplaint ? `${displayComplaint.lat.toFixed(4)}°N ${displayComplaint.lng.toFixed(4)}°E` : "Sector X, New Delhi" },
+                  { label: "Evidence Integrity", value: chainValid ? "✓ Verified" : "✓ Recorded" },
                 ].map(({ label, value }) => (
                   <div key={label}>
                     <div style={{ fontFamily: "var(--font-mono)", fontSize: "0.52rem", letterSpacing: "0.1em", textTransform: "uppercase", color: "#5C4A32", opacity: 0.45, marginBottom: 3 }}>
@@ -4268,7 +4294,7 @@ function ComplaintDetailPage({ onNavigate }: { onNavigate: (p: Page) => void }) 
                   Complaint Timeline
                 </h2>
                 <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.52rem", letterSpacing: "0.1em", textTransform: "uppercase", color: "#5C4A32", opacity: 0.4 }}>
-                  4 of 6 stages complete
+                  {timelineEvents.filter(e => e.done).length} of {timelineEvents.length} stages complete
                 </span>
               </div>
 
@@ -4353,20 +4379,22 @@ function ComplaintDetailPage({ onNavigate }: { onNavigate: (p: Page) => void }) 
               </div>
               <div className="px-6 py-5">
                 <div className="flex flex-col md:flex-row gap-6 items-start">
-                  {/* Large number */}
+                  {/* Large number - use live support count */}
                   <div className="flex-shrink-0 border px-6 py-5 text-center" style={{ borderColor: "#C8B89A", background: "#F5F0E8", borderRadius: "1px" }}>
-                    <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: "3.5rem", color: "#1C0A00", lineHeight: 1 }}>17</div>
+                    <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: "3.5rem", color: "#1C0A00", lineHeight: 1 }}>
+                      {displayComplaint?.supportCount ?? 17}
+                    </div>
                     <div style={{ fontFamily: "var(--font-mono)", fontSize: "0.5rem", letterSpacing: "0.1em", textTransform: "uppercase", color: "#5C4A32", opacity: 0.45, marginTop: 4 }}>Citizens</div>
                   </div>
 
                   <div className="flex-1">
                     <p style={{ fontFamily: "var(--font-body)", fontSize: "0.9rem", color: "#1C0A00", lineHeight: 1.65, marginBottom: 12 }}>
-                      17 citizens reported the same civic issue near Sector X. AI spatial deduplication identified nearby reports and combined them into one verified civic record.
+                      {displayComplaint?.supportCount ?? 17} citizens reported the same civic issue near {displayComplaint ? `${displayComplaint.lat.toFixed(2)}°N ${displayComplaint.lng.toFixed(2)}°E` : "Sector X"}. AI spatial deduplication identified nearby reports and combined them into one verified civic record.
                     </p>
 
                     {/* Dot clusters (visual) */}
                     <div className="flex items-center gap-1 mb-4 flex-wrap">
-                      {Array.from({ length: 17 }).map((_, i) => (
+                      {Array.from({ length: displayComplaint?.supportCount || 17 }).map((_, i) => (
                         <div key={i} style={{
                           width: 10, height: 10, borderRadius: "50%",
                           background: i < 4 ? "#9B3A3A" : i < 10 ? "#C4622D" : "#3A6B9B",
@@ -4374,7 +4402,7 @@ function ComplaintDetailPage({ onNavigate }: { onNavigate: (p: Page) => void }) 
                         }}/>
                       ))}
                       <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.52rem", color: "#5C4A32", opacity: 0.45, marginLeft: 6 }}>
-                        17 supporting reports
+                        {displayComplaint?.supportCount ?? 17} supporting reports
                       </span>
                     </div>
 
@@ -4397,7 +4425,7 @@ function ComplaintDetailPage({ onNavigate }: { onNavigate: (p: Page) => void }) 
                   Reported Location
                 </span>
                 <span style={{ fontFamily: "var(--font-body)", fontSize: "0.78rem", color: "#5C4A32" }}>
-                  Sector X, New Delhi
+                  {displayComplaint ? `${displayComplaint.lat.toFixed(4)}°N ${displayComplaint.lng.toFixed(4)}°E` : "Sector X, New Delhi"}
                 </span>
               </div>
               {/* Illustrated map */}
@@ -6412,6 +6440,14 @@ function VerificationPage({ onNavigate }: { onNavigate: (p: Page) => void }) {
 
   const civic = useCivic();
   const live = useLiveVerification(civic.selectedId);
+  const [chainStatus, setChainStatus] = useState<{ enabled: boolean; chainId: number | null; contract: string | null; explorer: string | null } | null>(null);
+  useEffect(() => {
+    getOnchainStatus().then(setChainStatus).catch(() => setChainStatus(null));
+  }, []);
+
+  const networkLabel = chainStatus?.enabled
+    ? chainStatus.chainId === 84532 ? "Base Sepolia (84532)" : chainStatus.chainId === 80002 ? "Polygon Amoy (80002)" : `Chain ID ${chainStatus.chainId}`
+    : "Off-chain hashchain (Web3 anchoring off)";
 
   const mockEvents = [
     {
@@ -6444,6 +6480,7 @@ function VerificationPage({ onNavigate }: { onNavigate: (p: Page) => void }) {
         desc: ev.note || ev.to_status,
         ref: `${ev.this_hash.slice(0, 6)}…${ev.this_hash.slice(-4)}`,
         color: ev.hash_ok && ev.link_ok ? "#4A7C5F" : "#9B3A3A",
+        txHash: (ev as unknown as { tx_hash?: string | null }).tx_hash ?? null,
       }))
     : mockEvents;
 
@@ -6547,6 +6584,9 @@ function VerificationPage({ onNavigate }: { onNavigate: (p: Page) => void }) {
           {live && (
             <div style={{ fontFamily: "var(--font-mono)", fontSize: "0.55rem", letterSpacing: "0.1em", textTransform: "uppercase", color: live.valid ? "#4A7C5F" : "#9B3A3A", marginTop: 12 }}>
               Chain valid: {live.valid ? "YES" : "NO"} · {live.events.length} event{live.events.length === 1 ? "" : "s"}
+              {live.onchain?.enabled && live.onchain?.txUrl ? (
+                <> · <a href={live.onchain.txUrl} target="_blank" rel="noreferrer" style={{ color: "#3A6B9B", textDecoration: "underline" }}>Anchored on-chain: {live.onchain.anchorTx?.slice(0, 6)}…{live.onchain.anchorTx?.slice(-4)} ↗</a></>
+              ) : null}
             </div>
           )}
         </div>
@@ -6675,6 +6715,12 @@ function VerificationPage({ onNavigate }: { onNavigate: (p: Page) => void }) {
                                   </svg>
                                   <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.58rem", color: "#3A6B9B", letterSpacing: "0.05em" }}>{ev.ref}</span>
                                 </div>
+                                {(ev as { txHash?: string | null }).txHash && chainStatus?.explorer ? (
+                                  <a href={`${chainStatus.explorer}/tx/${(ev as { txHash?: string | null }).txHash}`} target="_blank" rel="noreferrer"
+                                    style={{ fontFamily: "var(--font-mono)", fontSize: "0.56rem", letterSpacing: "0.08em", textTransform: "uppercase", color: "#4A7C5F", textDecoration: "underline" }}>
+                                    View tx ↗
+                                  </a>
+                                ) : null}
                                 <button onClick={() => setExpandedEvent(isExpanded ? null : i)}
                                   className="hover:opacity-70 transition-opacity"
                                   style={{ fontFamily: "var(--font-mono)", fontSize: "0.56rem", letterSpacing: "0.08em", textTransform: "uppercase", color: "#5C4A32", opacity: 0.55 }}>
@@ -6835,12 +6881,14 @@ function VerificationPage({ onNavigate }: { onNavigate: (p: Page) => void }) {
                 <div className="px-6 pb-5 border-t" style={{ borderColor: "#C8B89A" }}>
                   <div className="pt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
                     {[
-                      { label: "Complaint ID",     value: "CTY-48291-X" },
-                      { label: "Evidence Hash",    value: "7f4c…a921" },
-                      { label: "Previous Event",   value: "0x91d2…4ab7" },
-                      { label: "Current Event",    value: "0x83bc…12fa" },
-                      { label: "Timestamp",        value: "13 Sep 2026 · 14:32" },
-                      { label: "Network",          value: "CivicTrace Demo Network" },
+                      { label: "Complaint ID",     value: live?.complaint?.tracking_code ?? "CTY-48291-X" },
+                      { label: "Evidence Hash",    value: live?.events?.length ? `${live.events[live.events.length - 1].this_hash.slice(0, 6)}…${live.events[live.events.length - 1].this_hash.slice(-4)}` : "7f4c…a921" },
+                      { label: "Previous Event",   value: live?.events?.length ? `${live.events[live.events.length - 1].prev_hash.slice(0, 6)}…${live.events[live.events.length - 1].prev_hash.slice(-4)}` : "0x91d2…4ab7" },
+                      { label: "Current Event",    value: live?.events?.length ? `${live.events[live.events.length - 1].this_hash.slice(0, 6)}…${live.events[live.events.length - 1].this_hash.slice(-4)}` : "0x83bc…12fa" },
+                      { label: "Timestamp",        value: live?.events?.length ? new Date(live.events[live.events.length - 1].created_at).toLocaleString() : "13 Sep 2026 · 14:32" },
+                      { label: "Network",          value: networkLabel },
+                      { label: "Contract",         value: chainStatus?.contract ? `${chainStatus.contract.slice(0, 6)}…${chainStatus.contract.slice(-4)}` : "not deployed yet" },
+                      { label: "Anchor Tx",        value: live?.onchain?.anchorTx ? `${live.onchain.anchorTx.slice(0, 6)}…${live.onchain.anchorTx.slice(-4)}` : "pending / off" },
                     ].map(({ label, value }) => (
                       <div key={label} className="flex gap-4 items-start py-2 border-b" style={{ borderColor: "#EDE5D4" }}>
                         <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.52rem", letterSpacing: "0.08em", textTransform: "uppercase", color: "#5C4A32", opacity: 0.4, flexShrink: 0, minWidth: 110 }}>{label}</span>
@@ -6858,21 +6906,25 @@ function VerificationPage({ onNavigate }: { onNavigate: (p: Page) => void }) {
 
             {/* ── Independent Verification card ── */}
             <div className="border overflow-hidden" style={{ borderColor: "#C8B89A", borderRadius: "2px", background: "#FAF7F2" }}>
-              <div className="h-0.5" style={{ background: "#4A7C5F" }}/>
+              <div className="h-0.5" style={{ background: chainStatus?.enabled ? "#4A7C5F" : "#B8872A" }}/>
               <div className="px-5 py-4 border-b" style={{ borderColor: "#C8B89A" }}>
-                <h3 style={{ fontFamily: "var(--font-mono)", fontSize: "0.56rem", letterSpacing: "0.15em", textTransform: "uppercase", color: "#5C4A32", opacity: 0.55 }}>Independent Verification</h3>
+                <h3 style={{ fontFamily: "var(--font-mono)", fontSize: "0.56rem", letterSpacing: "0.15em", textTransform: "uppercase", color: "#5C4A32", opacity: 0.55 }}>Independent Verification · Web3</h3>
+              </div>
+              <div className="px-5 py-2" style={{ fontFamily: "var(--font-mono)", fontSize: "0.58rem", letterSpacing: "0.06em", color: chainStatus?.enabled ? "#4A7C5F" : "#B8872A" }}>
+                {chainStatus == null ? "Checking on-chain status…" : chainStatus.enabled ? `● ANCHORED · ${networkLabel}` : "○ OFF-CHAIN ONLY · anchoring disabled"}
               </div>
               <div className="px-5 py-4 space-y-0">
                 {[
-                  { label: "Network",            value: "CivicTrace Verification Network" },
-                  { label: "Record ID",          value: "CTY-48291-X" },
-                  { label: "Contract / Registry",value: "Civic Complaint Registry" },
-                  { label: "Record State",       value: "Valid" },
+                  { label: "Network",            value: networkLabel },
+                  { label: "Record ID",          value: live?.complaint?.tracking_code ?? "CTY-48291-X" },
+                  { label: "Contract / Registry",value: chainStatus?.contract ?? "not deployed yet" },
+                  { label: "Record State",       value: live ? (live.valid ? "Valid" : "CHAIN BROKEN") : "Valid (demo)" },
+                  { label: "On-chain match",     value: live?.onchain?.enabled ? (live.onchain.match ? "MATCH ✓" : live.onchain.error ?? "MISMATCH / PENDING") : "n/a (off)" },
                 ].map(({ label, value }, i, arr) => (
                   <div key={label} className="flex flex-col gap-0.5 py-3"
                     style={{ borderBottom: i < arr.length - 1 ? "1px solid #EDE5D4" : "none" }}>
                     <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.5rem", letterSpacing: "0.1em", textTransform: "uppercase", color: "#5C4A32", opacity: 0.4 }}>{label}</span>
-                    <span style={{ fontFamily: "var(--font-body)", fontSize: "0.82rem", color: label === "Record State" ? "#4A7C5F" : "#1C0A00" }}>{value}</span>
+                    <span style={{ fontFamily: "var(--font-body)", fontSize: "0.82rem", color: label === "Record State" ? "#4A7C5F" : "#1C0A00", wordBreak: "break-all" }}>{value}</span>
                   </div>
                 ))}
               </div>
@@ -6886,13 +6938,28 @@ function VerificationPage({ onNavigate }: { onNavigate: (p: Page) => void }) {
                     <><svg width="11" height="11" viewBox="0 0 11 11" fill="none"><rect x="1" y="3" width="7" height="7" rx="0.5" stroke="#1C0A00" strokeWidth="1"/><path d="M3 3 L3 1.5 L9.5 1.5 L9.5 8 L8 8" stroke="#1C0A00" strokeWidth="1"/></svg> Copy Record ID</>
                   )}
                 </button>
-                <button className="w-full py-2.5 flex items-center justify-center gap-2 hover:opacity-90 transition-opacity"
-                  style={{ background: "#1C0A00", color: "#F5F0E8", borderRadius: "1px", fontFamily: "var(--font-mono)", fontSize: "0.58rem", letterSpacing: "0.1em", textTransform: "uppercase" }}>
-                  <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-                    <path d="M5 1 L9 5 L5 9 M9 5 L1 5" stroke="#F5F0E8" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
-                  </svg>
-                  Demo Explorer ↗
-                </button>
+                {live?.onchain?.txUrl ? (
+                  <a href={live.onchain.txUrl} target="_blank" rel="noreferrer"
+                    className="w-full py-2.5 flex items-center justify-center gap-2 hover:opacity-90 transition-opacity"
+                    style={{ background: "#4A7C5F", color: "#F5F0E8", borderRadius: "1px", fontFamily: "var(--font-mono)", fontSize: "0.58rem", letterSpacing: "0.1em", textTransform: "uppercase" }}>
+                    View anchor tx ↗
+                  </a>
+                ) : null}
+                {chainStatus?.explorer && chainStatus?.contract ? (
+                  <a href={`${chainStatus.explorer}/address/${chainStatus.contract}`} target="_blank" rel="noreferrer"
+                    className="w-full py-2.5 flex items-center justify-center gap-2 hover:opacity-90 transition-opacity border"
+                    style={{ borderColor: "#1C0A00", color: "#1C0A00", borderRadius: "1px", fontFamily: "var(--font-mono)", fontSize: "0.58rem", letterSpacing: "0.1em", textTransform: "uppercase" }}>
+                    View contract ↗
+                  </a>
+                ) : (
+                  <button className="w-full py-2.5 flex items-center justify-center gap-2 hover:opacity-90 transition-opacity"
+                    style={{ background: "#1C0A00", color: "#F5F0E8", borderRadius: "1px", fontFamily: "var(--font-mono)", fontSize: "0.58rem", letterSpacing: "0.1em", textTransform: "uppercase" }}>
+                    <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                      <path d="M5 1 L9 5 L5 9 M9 5 L1 5" stroke="#F5F0E8" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
+                    </svg>
+                    Demo Explorer ↗
+                  </button>
+                )}
               </div>
             </div>
 

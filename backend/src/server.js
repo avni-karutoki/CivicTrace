@@ -7,6 +7,7 @@ import authRoutes from "./routes/auth.js";
 import complaintsRoutes from "./routes/complaints.js";
 import leaderboardRoutes from "./routes/leaderboard.js";
 import { startEscalationCron, runEscalationSweep } from "./escalation.js";
+import { isOnchainEnabled, explorerTxUrl } from "./onchain.js";
 
 const app = express();
 // CORS: allow local dev by default + any origins in FRONTEND_URL (comma-separated).
@@ -54,6 +55,17 @@ async function ensureSeeded() {
 }
 
 app.get("/health", (req, res) => res.json({ ok: true, time: new Date().toISOString(), db: "supabase" }));
+
+// Additive Web3 status — no effect on existing routes when disabled.
+app.get("/onchain/status", (req, res) => {
+  const enabled = isOnchainEnabled();
+  res.json({
+    enabled,
+    chainId: enabled ? Number(process.env.CHAIN_ID || 0) || null : null,
+    contract: enabled ? process.env.CONTRACT_ADDRESS : null,
+    explorer: enabled ? (process.env.EXPLORER_URL || null) : null,
+  });
+});
 app.get("/departments", asyncHandler(async (req, res) => {
   const { data, error } = await supabase.from("departments").select("*");
   if (error) return res.status(500).json({ error: error.message });

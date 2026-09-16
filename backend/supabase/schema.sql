@@ -1,5 +1,5 @@
 -- CivicTrace Supabase schema (Postgres)
--- Project: CivicTrace (ref: gpmpicvzwavwukswhvcs, region: ap-south-1)
+-- Project: CivicTrace (ref: dqkxccbvffoqelwwwctu, region: ap-northeast-1)
 -- Run this in Supabase Studio > SQL Editor (or `supabase db push`)
 -- Idempotent: safe to re-run.
 
