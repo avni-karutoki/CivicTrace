@@ -1938,6 +1938,7 @@ function ReportEvidencePage({ onBack, onContinue }: { onBack: () => void; onCont
   const [camErr, setCamErr] = useState("");
   const [preview, setPreview] = useState<string | null>(null);
   const [note, setNote] = useState("");
+  const [captureTimestamp, setCaptureTimestamp] = useState<Date | null>(null);
   const civic = useCivic();
 
   function stopCamera() {
@@ -1988,8 +1989,10 @@ function ReportEvidencePage({ onBack, onContinue }: { onBack: () => void; onCont
     if (!ctx) return;
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     const dataUrl = canvas.toDataURL("image/jpeg", 0.82);
+    const now = new Date();
     setPreview(dataUrl);
-    civic.setDraft({ photoDataUrl: dataUrl });
+    setCaptureTimestamp(now);
+    civic.setDraft({ photoDataUrl: dataUrl, photoNote: `Captured at ${now.toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}` });
     setCaptured(true);
     stopCamera();
   }
@@ -2003,9 +2006,11 @@ function ReportEvidencePage({ onBack, onContinue }: { onBack: () => void; onCont
       setTimeout(() => {
         setUploading(false);
         setCaptured(true);
+        const now = new Date();
         const dataUrl = ev.target?.result as string;
         setPreview(dataUrl);
-        civic.setDraft({ photoDataUrl: dataUrl });
+        setCaptureTimestamp(now);
+        civic.setDraft({ photoDataUrl: dataUrl, photoNote: `Uploaded at ${now.toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}` });
       }, 800);
     };
     reader.readAsDataURL(file);
@@ -2188,7 +2193,7 @@ function ReportEvidencePage({ onBack, onContinue }: { onBack: () => void; onCont
                     style={{ background: "rgba(245,240,232,0.92)", borderColor: "#C8B89A", borderRadius: "1px" }}>
                     <div className="w-1.5 h-1.5 rounded-full" style={{ background: "#4A7C5F" }}/>
                     <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.55rem", letterSpacing: "0.08em", color: "#1C0A00" }}>
-                      {new Date().toLocaleString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" }).replace(",", " ·")} IST
+                      {(captureTimestamp || new Date()).toLocaleString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" }).replace(",", " ·")} IST
                     </span>
                   </div>
                   <div className="absolute top-3 right-3 px-2.5 py-1.5 border"
@@ -2207,7 +2212,7 @@ function ReportEvidencePage({ onBack, onContinue }: { onBack: () => void; onCont
                 </div>
 
                 <div className="flex gap-3 mb-4">
-                  <button onClick={() => { stopCamera(); setCaptured(false); setPreview(null); setMethod(null); setCamErr(""); civic.setDraft({ photoDataUrl: null }); }}
+                  <button onClick={() => { stopCamera(); setCaptured(false); setPreview(null); setMethod(null); setCamErr(""); setCaptureTimestamp(null); civic.setDraft({ photoDataUrl: null }); }}
                     className="flex items-center gap-1.5 px-4 py-2.5 border hover:bg-[#EDE5D4] transition-colors"
                     style={{ borderColor: "#C8B89A", color: "#5C4A32", borderRadius: "1px",
                       fontFamily: "var(--font-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", textTransform: "uppercase" }}>
@@ -4092,10 +4097,10 @@ function ComplaintDetailPage({ onNavigate }: { onNavigate: (p: Page) => void }) 
   };
 
   return (
-    <div style={{ background: "#F5F0E8", minHeight: "100vh", fontFamily: "var(--font-body)" }>
+    <div style={{ background: "#F5F0E8", minHeight: "100vh", fontFamily: "var(--font-body)" }}>
 
       {/* ── Top bar ── */}
-      <div className="sticky top-0 z-40 border-b" style={{ background: "rgba(245,240,232,0.97)", borderColor: "#C8B89A", backdropFilter: "blur(8px)" }}>
+      <div className="sticky top-0 z-40 border-b" style={{ background: "rgba(245,240,232,0.97)", borderColor: "#C8B89A", backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)" }}>
         <div className="max-w-7xl mx-auto px-6 h-14 flex items-center justify-between gap-4">
           {/* Breadcrumb */}
           <div className="flex items-center gap-1.5 min-w-0" style={{ fontFamily: "var(--font-mono)", fontSize: "0.58rem", letterSpacing: "0.08em", color: "#5C4A32" }}>
@@ -4103,7 +4108,7 @@ function ComplaintDetailPage({ onNavigate }: { onNavigate: (p: Page) => void }) 
             <span className="opacity-40">›</span>
             <button onClick={() => onNavigate("my-complaints")} className="hover:opacity-80 transition-opacity opacity-50">My Complaints</button>
             <span className="opacity-40">›</span>
-            <span style={{ color: "#1C0A00" }}>{displayComplaint?.trackingCode || civic.selectedCode ?? "CTY-48291-X"}</span>
+            <span style={{ color: "#1C0A00" }}>{(displayComplaint?.trackingCode || civic.selectedCode) ?? "CTY-48291-X"}</span>
           </div>
           <div className="flex items-center gap-2">
             <CivicTraceLogo size={22}/>
