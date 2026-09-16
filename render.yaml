@@ -10,9 +10,9 @@ services:
     startCommand: npm start
     healthCheckPath: /health
     envVars:
-      - key: SUPABASE_URL
+      - key: https://gpmpicvzwavwukswhvcs.supabase.co
         sync: false
-      - key: SUPABASE_SERVICE_ROLE_KEY
+      - key: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdwbXBpY3Z6d2F2d3Vrc3dodmNzIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4OTM5ODcyNiwiZXhwIjoyMTA0OTc0NzI2fQ.ygzObCC6fQTIXBPJ0rvUuZ5Xh19QUiPrmidVTmuHJtc
         sync: false
-      - key: FRONTEND_URL
+      - key: https://civic-trace-xoc4.vercel.app/
         sync: false
