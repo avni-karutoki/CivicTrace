@@ -1,5 +1,7 @@
 {
-  "description": "Streamline project management with intuitive task tracking and collaboration tools designed for teams to enhance productivity and communication.",
+  "title": "CivicTrace",
+  "description": "CivicTrace — report civic issues, track verified resolutions, and hold authorities accountable on an independently verifiable public record.",
+  "language": "en",
   "robots": {
     "index": false
   },
