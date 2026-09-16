@@ -11,7 +11,7 @@ services:
     healthCheckPath: /health
     envVars:
       - key: SUPABASE_URL
-        value: https://gpmpicvzwavwukswhvcs.supabase.co
+        sync: false
       - key: SUPABASE_SERVICE_ROLE_KEY
         sync: false
       - key: FRONTEND_URL
