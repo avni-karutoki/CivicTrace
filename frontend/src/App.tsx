@@ -9781,6 +9781,24 @@ function HowItWorksPage({ onNavigate }: { onNavigate: (p: Page) => void }) {
   );
 }
 
+// Backend lifecycle status → authority queue section. REPORTED/ASSESSED complaints
+// are still awaiting authority action, so they belong under Pending.
+function queueSectionStatus(raw: string): string {
+  switch (raw) {
+    case "REPORTED":
+    case "ASSESSED":
+      return "Pending";
+    case "IN_PROGRESS":
+      return "In Progress";
+    case "RESOLVED":
+      return "Resolved";
+    case "DISPUTED":
+      return "Disputed";
+    default:
+      return STATUS_UI[raw] ?? raw;
+  }
+}
+
 // ─── Authority Dashboard Page ─────────────────────────────────────────────────
 function AuthorityDashboardPage({ onNavigate }: { onNavigate: (p: Page) => void }) {
   const [activeNav, setActiveNav] = useState<"dashboard" | "complaints" | "escalations" | "analytics">("dashboard");
@@ -9826,7 +9844,7 @@ function AuthorityDashboardPage({ onNavigate }: { onNavigate: (p: Page) => void 
         issue: b.description || CATEGORY_LABELS[b.category] || b.category,
         category: CATEGORY_LABELS[b.category] || b.category,
         priority: PRIORITY_UI[b.priority] ?? "NORMAL",
-        status: STATUS_UI[b.status] ?? b.status,
+        status: queueSectionStatus(b.status),
         age: timeAgo(b.last_action_at),
         impact: Math.min(99, b.support_count * 5 + 50),
       }))
@@ -10844,7 +10862,7 @@ function AuthorityComplaintQueuePage({ onNavigate }: { onNavigate: (p: Page) => 
         issue: b.description || CATEGORY_LABELS[b.category] || b.category,
         category: CATEGORY_LABELS[b.category] || b.category,
         priority: PRIORITY_UI[b.priority] ?? "NORMAL",
-        status: (STATUS_UI[b.status] ?? b.status) as QComplaint["status"],
+        status: queueSectionStatus(b.status) as QComplaint["status"],
         age: timeAgo(b.last_action_at),
         impact: Math.min(99, b.support_count * 5 + 50),
       }))
@@ -10857,6 +10875,7 @@ function AuthorityComplaintQueuePage({ onNavigate }: { onNavigate: (p: Page) => 
     { label: "Awaiting Proof",filter: "Awaiting Proof" },
     { label: "Unresolved",    filter: "Unresolved" },
     { label: "Disputed",      filter: "Disputed" },
+    { label: "Resolved",      filter: "Resolved" },
   ];
 
   const tabCounts: Record<string, number> = {
@@ -10866,6 +10885,7 @@ function AuthorityComplaintQueuePage({ onNavigate }: { onNavigate: (p: Page) => 
     "Awaiting Proof": allComplaints.filter(c => c.status === "Awaiting Proof").length,
     Unresolved: allComplaints.filter(c => c.status === "Unresolved").length,
     Disputed: allComplaints.filter(c => c.status === "Disputed").length,
+    Resolved: allComplaints.filter(c => c.status === "Resolved").length,
   };
 
   const categories = ["All Categories", "Public Safety", "Water & Drainage", "Sanitation", "Roads & Infrastructure", "Public Property", "Parks & Environment"];
@@ -11974,9 +11994,51 @@ function AuthorityEscalationsPage({ onNavigate }: { onNavigate: (p: Page) => voi
 }
 
 // ─── App ─────────────────────────────────────────────────────────────────────
+// ─── Global Back Button (visible on every page with navigation history) ─────
+function GlobalBackButton({ onBack }: { onBack: () => void }) {
+  return (
+    <button onClick={onBack} aria-label="Go back to previous page"
+      className="fixed bottom-5 left-5 z-40 flex items-center gap-2 px-4 py-2.5 border transition-all hover:-translate-x-0.5"
+      style={{ background: "#FAF7F2", borderColor: "#1C0A00", color: "#1C0A00", borderRadius: "1px",
+        fontFamily: "var(--font-mono)", fontSize: "0.62rem", letterSpacing: "0.1em", textTransform: "uppercase",
+        boxShadow: "0 4px 16px rgba(28,10,0,0.15)" }}>
+      <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+        <path d="M7.5 2 L4 6 L7.5 10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+      </svg>
+      Back
+    </button>
+  );
+}
+
 export default function App() {
   const [page, setPage] = useState<Page>("home");
   const [navOpen, setNavOpen] = useState(false);
+  // Navigation history so the global Back button returns to the previous page.
+  const historyRef = useRef<Page[]>([]);
+  const pageRef = useRef<Page>("home");
+  const [canGoBack, setCanGoBack] = useState(false);
+
+  function navigate(next: Page) {
+    const current = pageRef.current;
+    if (next !== current) {
+      historyRef.current.push(current);
+      if (historyRef.current.length > 30) historyRef.current.shift();
+      setCanGoBack(true);
+      pageRef.current = next;
+      navigate(next);
+      window.scrollTo(0, 0);
+    }
+  }
+
+  function goBack() {
+    const prev = historyRef.current.pop();
+    if (prev !== undefined) {
+      pageRef.current = prev;
+      navigate(prev);
+      window.scrollTo(0, 0);
+    }
+    if (historyRef.current.length === 0) setCanGoBack(false);
+  }
 
   const features = [
     { icon: icons.shield, title: "Hidden Identity", desc: "Your identity stays protected while your complaint remains fully accountable to authorities.", tag: "Privacy", },
@@ -11993,31 +12055,30 @@ export default function App() {
     { id: "CTY-55017-M", issue: "Broken Streetlight", location: "Sector M, Park Avenue", priority: "URGENT", status: "REPORTED", score: 62 },
   ];
 
-  if (page === "auth") return <PageTransition pageKey={page}><AuthPage onBack={() => setPage("home")} onSuccess={() => setPage("dashboard")}/></PageTransition>;
-  if (page === "dashboard") return <PageTransition pageKey={page}><CitizenDashboard onNavigate={setPage}/></PageTransition>;
-  if (page === "report-category") return <PageTransition pageKey={page}><ReportCategoryPage onBack={() => setPage("dashboard")} onContinue={() => setPage("report-evidence")}/></PageTransition>;
-  if (page === "report-evidence") return <PageTransition pageKey={page}><ReportEvidencePage onBack={() => setPage("report-category")} onContinue={() => setPage("report-details")}/></PageTransition>;
-  if (page === "report-details") return <PageTransition pageKey={page}><ReportDetailsPage onBack={() => setPage("report-evidence")} onContinue={() => setPage("complaint-submitted")}/></PageTransition>;
-  if (page === "complaint-submitted") return <PageTransition pageKey={page}><ComplaintSubmittedPage onNavigate={setPage}/></PageTransition>;
-  if (page === "my-complaints") return <PageTransition pageKey={page}><MyComplaintsPage onNavigate={setPage}/></PageTransition>;
-  if (page === "complaint-detail") return <PageTransition pageKey={page}><ComplaintDetailPage onNavigate={setPage}/></PageTransition>;
-  if (page === "proof-of-fix") return <PageTransition pageKey={page}><ProofOfFixPage onNavigate={setPage}/></PageTransition>;
-  if (page === "civic-map") return <PageTransition pageKey={page}><PublicCivicMapPage onNavigate={setPage}/></PageTransition>;
-  if (page === "public-record") return <PageTransition pageKey={page}><PublicComplaintRecordPage onNavigate={setPage}/></PageTransition>;
-  if (page === "verification") return <PageTransition pageKey={page}><VerificationPage onNavigate={setPage}/></PageTransition>;
-  if (page === "leaderboard") return <PageTransition pageKey={page}><LeaderboardPage onNavigate={setPage}/></PageTransition>;
-  if (page === "dept-trust") return <PageTransition pageKey={page}><DeptTrustPage onNavigate={setPage}/></PageTransition>;
-  if (page === "impact-dashboard") return <PageTransition pageKey={page}><ImpactDashboardPage onNavigate={setPage}/></PageTransition>;
-  if (page === "about") return <PageTransition pageKey={page}><AboutPage onNavigate={setPage}/></PageTransition>;
-  if (page === "how-it-works") return <PageTransition pageKey={page}><HowItWorksPage onNavigate={setPage}/></PageTransition>;
-  if (page === "authority-login") return <PageTransition pageKey={page}><AuthorityLoginPage onNavigate={setPage}/></PageTransition>;
-  if (page === "authority-dashboard") return <PageTransition pageKey={page}><AuthorityDashboardPage onNavigate={setPage}/></PageTransition>;
-  if (page === "authority-complaint-queue") return <PageTransition pageKey={page}><AuthorityComplaintQueuePage onNavigate={setPage}/></PageTransition>;
-  if (page === "authority-complaint-detail") return <PageTransition pageKey={page}><AuthorityComplaintDetailPage onNavigate={setPage}/></PageTransition>;
-  if (page === "authority-escalations") return <PageTransition pageKey={page}><AuthorityEscalationsPage onNavigate={setPage}/></PageTransition>;
-
-  return (
-    <PageTransition pageKey="home">
+  let content: React.ReactNode = null;
+  if (page === "auth") content = <AuthPage onBack={() => navigate("home")} onSuccess={() => navigate("dashboard")}/>;
+  else if (page === "dashboard") content = <CitizenDashboard onNavigate={navigate}/>;
+  else if (page === "report-category") content = <ReportCategoryPage onBack={() => navigate("dashboard")} onContinue={() => navigate("report-evidence")}/>;
+  else if (page === "report-evidence") content = <ReportEvidencePage onBack={() => navigate("report-category")} onContinue={() => navigate("report-details")}/>;
+  else if (page === "report-details") content = <ReportDetailsPage onBack={() => navigate("report-evidence")} onContinue={() => navigate("complaint-submitted")}/>;
+  else if (page === "complaint-submitted") content = <ComplaintSubmittedPage onNavigate={navigate}/>;
+  else if (page === "my-complaints") content = <MyComplaintsPage onNavigate={navigate}/>;
+  else if (page === "complaint-detail") content = <ComplaintDetailPage onNavigate={navigate}/>;
+  else if (page === "proof-of-fix") content = <ProofOfFixPage onNavigate={navigate}/>;
+  else if (page === "civic-map") content = <PublicCivicMapPage onNavigate={navigate}/>;
+  else if (page === "public-record") content = <PublicComplaintRecordPage onNavigate={navigate}/>;
+  else if (page === "verification") content = <VerificationPage onNavigate={navigate}/>;
+  else if (page === "leaderboard") content = <LeaderboardPage onNavigate={navigate}/>;
+  else if (page === "dept-trust") content = <DeptTrustPage onNavigate={navigate}/>;
+  else if (page === "impact-dashboard") content = <ImpactDashboardPage onNavigate={navigate}/>;
+  else if (page === "about") content = <AboutPage onNavigate={navigate}/>;
+  else if (page === "how-it-works") content = <HowItWorksPage onNavigate={navigate}/>;
+  else if (page === "authority-login") content = <AuthorityLoginPage onNavigate={navigate}/>;
+  else if (page === "authority-dashboard") content = <AuthorityDashboardPage onNavigate={navigate}/>;
+  else if (page === "authority-complaint-queue") content = <AuthorityComplaintQueuePage onNavigate={navigate}/>;
+  else if (page === "authority-complaint-detail") content = <AuthorityComplaintDetailPage onNavigate={navigate}/>;
+  else if (page === "authority-escalations") content = <AuthorityEscalationsPage onNavigate={navigate}/>;
+  else content = (
     <div style={{ background: "#F5F0E8", color: "#1C0A00", fontFamily: "var(--font-body)", minHeight: "100vh" }}>
 
       {/* ── NAVBAR ── */}
@@ -12032,11 +12093,11 @@ export default function App() {
           <div className="hidden md:flex items-center gap-7">
             {["About", "Features", "Map", "Leaderboard", "How It Works"].map(item => (
               item === "About"
-                ? <button key={item} onClick={() => setPage("about")}
+                ? <button key={item} onClick={() => navigate("about")}
                     className="nav-link font-mono text-xs tracking-widest uppercase opacity-60 hover:opacity-100 transition-opacity"
                     style={{ color: "#1C0A00" }}>About</button>
                 : item === "How It Works"
-                ? <button key={item} onClick={() => setPage("how-it-works")}
+                ? <button key={item} onClick={() => navigate("how-it-works")}
                     className="nav-link font-mono text-xs tracking-widest uppercase opacity-60 hover:opacity-100 transition-opacity"
                     style={{ color: "#1C0A00" }}>How It Works</button>
                 : <a key={item} href={`#${item.toLowerCase().replace(" ", "-")}`}
@@ -12046,11 +12107,11 @@ export default function App() {
           </div>
 
           <div className="hidden md:flex items-center gap-2">
-            <button onClick={() => setPage("auth")} className="px-3 py-2 border hover:bg-[#EDE5D4] transition-colors font-mono text-xs tracking-widest uppercase"
+            <button onClick={() => navigate("auth")} className="px-3 py-2 border hover:bg-[#EDE5D4] transition-colors font-mono text-xs tracking-widest uppercase"
               style={{ borderColor: "#C8B89A", color: "#5C4A32", borderRadius: "1px" }}>
               Citizen Login
             </button>
-            <button onClick={() => setPage("authority-login")} className="px-3 py-2 border hover:opacity-80 transition-opacity font-mono text-xs tracking-widest uppercase"
+            <button onClick={() => navigate("authority-login")} className="px-3 py-2 border hover:opacity-80 transition-opacity font-mono text-xs tracking-widest uppercase"
               style={{ borderColor: "#1C0A00", color: "#1C0A00", borderRadius: "1px" }}>
               Authority Login
             </button>
@@ -12069,11 +12130,11 @@ export default function App() {
           <div className="drawer-in md:hidden border-t px-6 py-4 space-y-3" style={{ borderColor: "#C8B89A", background: "#F5F0E8" }}>
             {["About", "Features", "Map", "Leaderboard", "How It Works"].map(item => (
               item === "About"
-                ? <button key={item} onClick={() => { setPage("about"); setNavOpen(false); }}
+                ? <button key={item} onClick={() => { navigate("about"); setNavOpen(false); }}
                     className="block font-mono text-xs tracking-widest uppercase opacity-60"
                     style={{ color: "#1C0A00" }}>About</button>
                 : item === "How It Works"
-                ? <button key={item} onClick={() => { setPage("how-it-works"); setNavOpen(false); }}
+                ? <button key={item} onClick={() => { navigate("how-it-works"); setNavOpen(false); }}
                     className="block font-mono text-xs tracking-widest uppercase opacity-60"
                     style={{ color: "#1C0A00" }}>How It Works</button>
                 : <a key={item} href={`#${item.toLowerCase().replace(" ", "-")}`}
@@ -12098,12 +12159,12 @@ export default function App() {
               CivicTrace turns civic complaints into transparent, trackable and verifiable public records. Every report. Every resolution. Every proof — permanently recorded.
             </p>
             <div className="rise-in rise-d2 flex flex-wrap gap-3">
-              <button onClick={() => setPage("auth")} className="btn-primary px-6 py-3 font-mono text-xs tracking-widest uppercase transition-all hover:opacity-90 flex items-center gap-2"
+              <button onClick={() => navigate("auth")} className="btn-primary px-6 py-3 font-mono text-xs tracking-widest uppercase transition-all hover:opacity-90 flex items-center gap-2"
                 style={{ background: "#1C0A00", color: "#F5F0E8", borderRadius: "1px" }}>
                 <span className="w-2 h-2 rounded-full" style={{ background: "#9B3A3A" }}/>
                 Report an Issue
               </button>
-              <button onClick={() => setPage("civic-map")} className="px-6 py-3 border font-mono text-xs tracking-widest uppercase transition-colors hover:bg-[#EDE5D4]"
+              <button onClick={() => navigate("civic-map")} className="px-6 py-3 border font-mono text-xs tracking-widest uppercase transition-colors hover:bg-[#EDE5D4]"
                 style={{ borderColor: "#1C0A00", color: "#1C0A00", borderRadius: "1px" }}>
                 Explore Civic Map
               </button>
@@ -12129,7 +12190,7 @@ export default function App() {
           {/* Hero Map */}
           <div className="relative">
             <div className="absolute -top-3 -left-3 w-full h-full border" style={{ borderColor: "#C8B89A", borderRadius: "2px" }}/>
-            <div onClick={() => setPage("civic-map")} className="relative border overflow-hidden cursor-pointer group" style={{ borderColor: "#C8B89A", borderRadius: "2px" }}>
+            <div onClick={() => navigate("civic-map")} className="relative border overflow-hidden cursor-pointer group" style={{ borderColor: "#C8B89A", borderRadius: "2px" }}>
               <CivicMap/>
               <div className="absolute bottom-3 left-3 right-3 flex items-end justify-between">
                 <MapLegend/>
@@ -12216,12 +12277,12 @@ export default function App() {
                 </div>
               ))}
             </div>
-            <button onClick={() => setPage("civic-map")} className="mt-6 w-full py-3 border font-mono text-xs tracking-widest uppercase hover:bg-[#EDE5D4] transition-colors"
+            <button onClick={() => navigate("civic-map")} className="mt-6 w-full py-3 border font-mono text-xs tracking-widest uppercase hover:bg-[#EDE5D4] transition-colors"
               style={{ borderColor: "#1C0A00", color: "#1C0A00", borderRadius: "1px" }}>
               Explore Civic Map
             </button>
           </div>
-          <div onClick={() => setPage("civic-map")} className="card-lift border overflow-hidden relative cursor-pointer group" style={{ borderColor: "#C8B89A", borderRadius: "2px" }}>
+          <div onClick={() => navigate("civic-map")} className="card-lift border overflow-hidden relative cursor-pointer group" style={{ borderColor: "#C8B89A", borderRadius: "2px" }}>
             <CivicMap/>
             <div className="absolute top-3 right-3 px-3 py-1.5 border font-mono text-xs flex items-center gap-2" style={{ borderColor: "#C8B89A", background: "rgba(245,240,232,0.9)", color: "#5C4A32" }}>
               <span className="live-dot w-1.5 h-1.5 rounded-full inline-block" style={{ background: "#4A7C5F" }}/>
@@ -12278,7 +12339,7 @@ export default function App() {
         <Reveal>
         <div className="grid md:grid-cols-2 gap-12 items-center">
           <div className="flex justify-center md:justify-start">
-            <BlockchainRecord onNavigate={setPage}/>
+            <BlockchainRecord onNavigate={navigate}/>
           </div>
           <div>
             <SectionLabel>Blockchain Verification</SectionLabel>
@@ -12406,7 +12467,7 @@ export default function App() {
             </div>
           </div>
           <div className="space-y-4">
-            {complaints.map((c, i) => <Reveal key={c.id} delay={Math.min(i, 4) * 80}><ComplaintCard {...c} onNavigate={setPage}/></Reveal>)}
+            {complaints.map((c, i) => <Reveal key={c.id} delay={Math.min(i, 4) * 80}><ComplaintCard {...c} onNavigate={navigate}/></Reveal>)}
           </div>
         </div>
         </Reveal>
@@ -12425,12 +12486,12 @@ export default function App() {
           Every unresolved pothole, every burst pipe, every broken streetlight — now has a permanent, verifiable record.
         </p>
         <div className="flex flex-wrap gap-4 justify-center">
-          <button onClick={() => setPage("auth")} className="btn-primary px-8 py-4 font-mono text-xs tracking-widest uppercase flex items-center gap-2 hover:opacity-90 transition-opacity"
+          <button onClick={() => navigate("auth")} className="btn-primary px-8 py-4 font-mono text-xs tracking-widest uppercase flex items-center gap-2 hover:opacity-90 transition-opacity"
             style={{ background: "#1C0A00", color: "#F5F0E8", borderRadius: "1px" }}>
             <span className="w-2 h-2 rounded-full" style={{ background: "#9B3A3A" }}/>
             Report an Issue
           </button>
-          <button onClick={() => setPage("civic-map")} className="btn-press px-8 py-4 border font-mono text-xs tracking-widest uppercase hover:bg-[#EDE5D4] transition-colors"
+          <button onClick={() => navigate("civic-map")} className="btn-press px-8 py-4 border font-mono text-xs tracking-widest uppercase hover:bg-[#EDE5D4] transition-colors"
             style={{ borderColor: "#1C0A00", color: "#1C0A00", borderRadius: "1px" }}>
             Explore Civic Map
           </button>
@@ -12475,7 +12536,7 @@ export default function App() {
                 <div className="space-y-2">
                   {links.map(({ label, page: p }) => (
                     p
-                      ? <button key={label} onClick={() => setPage(p)} className="block font-body text-sm opacity-70 hover:opacity-100 transition-opacity text-left" style={{ color: "#1C0A00" }}>{label}</button>
+                      ? <button key={label} onClick={() => navigate(p)} className="block font-body text-sm opacity-70 hover:opacity-100 transition-opacity text-left" style={{ color: "#1C0A00" }}>{label}</button>
                       : <span key={label} className="block font-body text-sm opacity-40" style={{ color: "#1C0A00" }}>{label}</span>
                   ))}
                 </div>
@@ -12493,6 +12554,12 @@ export default function App() {
         </div>
       </footer>
     </div>
+  );
+
+  return (
+    <PageTransition pageKey={page}>
+      {content}
+      {page !== "home" && canGoBack && <GlobalBackButton onBack={goBack}/>}
     </PageTransition>
   );
 }
