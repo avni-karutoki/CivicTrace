@@ -62,6 +62,9 @@ interface CivicState extends AuthState {
   selectedId: string | null;
   selectedCode: string | null;
   select: (id: string | null, code?: string | null) => void;
+  /** When true, VerificationPage auto-expands blockchain proof on mount. */
+  expandProof: boolean;
+  setExpandProof: (v: boolean) => void;
   lastResult: SubmitResult | null;
   submitting: boolean;
   submitReport: () => Promise<SubmitResult>;
@@ -93,6 +96,7 @@ export function CivicProvider({ children }: { children: ReactNode }) {
   const [selectedCode, setSelectedCode] = useState<string | null>(null);
   const [lastResult, setLastResult] = useState<SubmitResult | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [expandProof, setExpandProof] = useState(false);
 
   // Best-effort geolocation once (report submit falls back to Delhi coords).
   useEffect(() => {
@@ -230,12 +234,14 @@ export function CivicProvider({ children }: { children: ReactNode }) {
       user, token, login, logout, authError,
       draft, setDraft, resetDraft,
       selectedId, selectedCode, select,
+      expandProof, setExpandProof,
       lastResult, submitting, submitReport,
       updateStatus, submitProof, disputeComplaint, acceptFix,
       actionError,
     }),
     [user, token, login, logout, authError, draft, setDraft, resetDraft,
-      selectedId, selectedCode, select, lastResult, submitting, submitReport,
+      selectedId, selectedCode, select, expandProof,
+      lastResult, submitting, submitReport,
       updateStatus, submitProof, disputeComplaint, acceptFix, actionError]
   );
 

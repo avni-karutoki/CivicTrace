@@ -4100,7 +4100,8 @@ function ComplaintDetailPage({ onNavigate }: { onNavigate: (p: Page) => void }) 
   const currentStatus = displayComplaint?.status || "REPORTED";
   const statusCfg = STATUS_CONFIG[currentStatus] || STATUS_CONFIG["REPORTED"];
 
-  const handleViewVerification = () => {
+  const handleViewVerification = (expand = false) => {
+    civic.setExpandProof(expand);
     onNavigate("verification");
   };
 
@@ -4168,7 +4169,7 @@ function ComplaintDetailPage({ onNavigate }: { onNavigate: (p: Page) => void }) 
 
             {/* Actions top-right */}
             <div className="flex flex-col gap-2 md:items-end">
-              <button onClick={handleViewVerification}
+              <button onClick={() => handleViewVerification(false)}
                 className="px-5 py-2.5 hover:opacity-90 transition-opacity"
                 style={{ background: "#1C0A00", color: "#F5F0E8", borderRadius: "1px",
                   fontFamily: "var(--font-mono)", fontSize: "0.6rem", letterSpacing: "0.1em", textTransform: "uppercase" }}>
@@ -4594,7 +4595,7 @@ function ComplaintDetailPage({ onNavigate }: { onNavigate: (p: Page) => void }) 
                 <p style={{ fontFamily: "var(--font-mono)", fontSize: "0.53rem", color: "#5C4A32", opacity: 0.5, lineHeight: 1.5, marginTop: 12, letterSpacing: "0.04em" }}>
                   Important lifecycle events are backed by verifiable blockchain records.
                 </p>
-                <button onClick={handleViewVerification}
+                <button onClick={() => handleViewVerification(true)}
                   className="w-full py-2.5 mt-2 flex items-center justify-center gap-1.5 hover:opacity-90 transition-opacity"
                   style={{ background: "#1C0A00", color: "#F5F0E8", borderRadius: "1px",
                     fontFamily: "var(--font-mono)", fontSize: "0.58rem", letterSpacing: "0.1em", textTransform: "uppercase" }}>
@@ -6457,6 +6458,16 @@ function VerificationPage({ onNavigate }: { onNavigate: (p: Page) => void }) {
   useEffect(() => {
     getOnchainStatus().then(setChainStatus).catch(() => setChainStatus(null));
   }, []);
+  // When arriving via "View Blockchain Proof", auto-expand the technical
+  // proof so the blockchain verification is actually visible.
+  const [autoExpand] = useState(civic.expandProof);
+  useEffect(() => {
+    if (civic.expandProof) {
+      setProofOpen(true);
+      civic.setExpandProof(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const networkLabel = chainStatus?.enabled
     ? chainStatus.chainId === 84532 ? "Base Sepolia (84532)" : chainStatus.chainId === 80002 ? "Polygon Amoy (80002)" : `Chain ID ${chainStatus.chainId}`
@@ -6496,6 +6507,14 @@ function VerificationPage({ onNavigate }: { onNavigate: (p: Page) => void }) {
         txHash: (ev as unknown as { tx_hash?: string | null }).tx_hash ?? null,
       }))
     : mockEvents;
+
+  // Auto-expand the latest event's proof when arriving from "View Blockchain Proof".
+  useEffect(() => {
+    if (autoExpand && events.length) {
+      setExpandedEvent(events.length - 1);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoExpand, live?.events?.length]);
 
   const recorded = [
     "Complaint creation",
