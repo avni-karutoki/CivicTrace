@@ -12074,7 +12074,7 @@ export default function App() {
       if (historyRef.current.length > 30) historyRef.current.shift();
       setCanGoBack(true);
       pageRef.current = next;
-      navigate(next);
+      setPage(next);
       window.scrollTo(0, 0);
     }
   }
@@ -12083,7 +12083,7 @@ export default function App() {
     const prev = historyRef.current.pop();
     if (prev !== undefined) {
       pageRef.current = prev;
-      navigate(prev);
+      setPage(prev);
       window.scrollTo(0, 0);
     }
     if (historyRef.current.length === 0) setCanGoBack(false);
