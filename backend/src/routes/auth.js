@@ -45,10 +45,13 @@ router.post("/login", asyncHandler(async (req, res) => {
     user = created;
   }
 
-  // Returning user: refresh the stored display name so the greeting reflects
-  // what was typed this time. Role is intentionally NOT touched here — the
-  // citizen form always sends role "citizen" and must never demote authorities.
-  if (existing && name && name !== user.name) {
+  // Returning user: refresh the stored display name ONLY when a real name was
+  // typed (signup form). The citizen login form sends contact as name — that
+  // must NEVER overwrite the stored name, otherwise every login corrupts the
+  // greeting to show the email/phone instead of the citizen's name.
+  // Role is intentionally NOT touched here — the citizen form always sends
+  // role "citizen" and must never demote authorities.
+  if (existing && name && name !== user.name && name !== contact) {
     const { error: renameError } = await supabase
       .from("users")
       .update({ name })

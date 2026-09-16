@@ -166,7 +166,13 @@ function AuthPage({ onBack, onSuccess }: { onBack: () => void; onSuccess?: () =>
     setLoading(true);
     setLoginErr("");
     const contact = method === "email" ? email.trim() : phone.trim();
-    // Use name from signup form, otherwise let backend return stored name
+    if (mode === "signup" && !name.trim()) {
+      setLoading(false);
+      setLoginErr("Please enter your full name to create an account.");
+      return;
+    }
+    // Signup sends the typed name (stored once); login sends contact as name
+    // which the backend ignores for existing users, preserving stored names.
     const displayName = mode === "signup" ? name.trim() : contact || "Citizen";
     // Best-effort backend login (demo auth, no OTP server-side). Always
     // continue so the demo works even when the backend is unreachable.
