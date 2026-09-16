@@ -1,6 +1,7 @@
 import { nanoid } from "nanoid";
 import { supabase } from "./supabase.js";
 import { appendStatusEvent } from "./hashchain.js";
+import { anchorStatusEvent, isOnchainEnabled } from "./onchain.js";
 import { bumpPriority } from "./dedup.js";
 
 // Stale thresholds, in ms. Kept short here (minutes) so it's demoable live;
@@ -40,7 +41,7 @@ export async function runEscalationSweep() {
         continue;
       }
 
-      await appendStatusEvent({
+      const escEvent = await appendStatusEvent({
         complaintId: c.id,
         fromStatus: c.status,
         toStatus: c.status,
@@ -48,6 +49,10 @@ export async function runEscalationSweep() {
         actorRole: "system",
         note: `Auto-escalated: no action for ${Math.round(stalledMs / 60000)} min, priority ${c.priority} -> ${newPriority}`,
       });
+      // Additive anchor, fire-and-forget — never blocks escalation.
+      if (isOnchainEnabled()) {
+        anchorStatusEvent({ complaintId: c.id, trackingCode: c.tracking_code, fromStatus: c.status, toStatus: c.status, thisHash: escEvent?.thisHash }).catch(() => {});
+      }
 
       if (c.department_id) {
         await supabase.from("notifications").insert({
