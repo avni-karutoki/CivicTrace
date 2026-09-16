@@ -968,7 +968,7 @@ function CitizenDashboard({ onNavigate }: { onNavigate: (p: Page) => void }) {
   const complaints = filed.map(toCardComplaint).map(c => ({ ...c, timeline: ["Reported"], activeStep: 0 }));
   const supported = supportedRaw.map(b => {
     const c = toCardComplaint(b);
-    return { id: c.id, issue: c.issue, location: c.location, status: c.status };
+    return { backendId: c.backendId, id: c.id, issue: c.issue, location: c.location, status: c.status };
   });
 
   const codeById = new Map<string, string>();
@@ -1315,7 +1315,7 @@ function CitizenDashboard({ onNavigate }: { onNavigate: (p: Page) => void }) {
                     </div>
                     <div className="flex items-center gap-3">
                       <PriorityPip priority={s.status}/>
-                      <button onClick={() => { civic.select(null, s.id); onNavigate("complaint-detail"); }} style={{ fontFamily: "var(--font-mono)", fontSize: "0.58rem", letterSpacing: "0.08em", textTransform: "uppercase", color: "#3A6B9B", opacity: 0.7 }}>
+                      <button onClick={() => { const sb = s as typeof s & { backendId?: string }; civic.select(sb.backendId ?? null, s.id); onNavigate("complaint-detail"); }} style={{ fontFamily: "var(--font-mono)", fontSize: "0.58rem", letterSpacing: "0.08em", textTransform: "uppercase", color: "#3A6B9B", opacity: 0.7 }}>
                         View →
                       </button>
                     </div>
@@ -4112,6 +4112,26 @@ function ComplaintDetailPage({ onNavigate }: { onNavigate: (p: Page) => void }) 
   const events = live?.events ?? [];
   const onchain = live?.onchain;
   const chainValid = live?.valid;
+
+  // Resolve the backend id when this page was opened with only a tracking
+  // code (supported list, my-complaints sync, cards without backend id).
+  // Without this the page falls back to demo "Major Pothole" content.
+  const [resolvingCode, setResolvingCode] = useState(false);
+  const resolveCode = !civic.selectedId
+    ? civic.selectedCode
+    : civic.selectedId.startsWith("CTY-")
+      ? (civic.selectedCode || civic.selectedId)
+      : null;
+  useEffect(() => {
+    if (!live?.complaint && resolveCode && !resolvingCode) {
+      setResolvingCode(true);
+      api.trackComplaint(resolveCode)
+        .then(b => { civic.select(b.id, b.tracking_code); })
+        .catch(() => {})
+        .finally(() => setResolvingCode(false));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resolveCode, live?.complaint]);
 
   // Format complaint data for display
   const displayComplaint = complaint ? {
