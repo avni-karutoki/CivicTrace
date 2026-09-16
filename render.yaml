@@ -1,0 +1,18 @@
+# Render Blueprint — one-click backend deploy.
+# Render Dashboard → New → Blueprint → paste this repo URL.
+# You will be prompted for SUPABASE_SERVICE_ROLE_KEY and FRONTEND_URL.
+services:
+  - type: web
+    name: civictrace-backend
+    runtime: node
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: SUPABASE_URL
+        value: https://gpmpicvzwavwukswhvcs.supabase.co
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
