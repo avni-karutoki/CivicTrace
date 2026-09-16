@@ -1427,8 +1427,8 @@ function CitizenDashboard({ onNavigate }: { onNavigate: (p: Page) => void }) {
                     No on-chain activity yet. Your first report will create a verifiable record.
                   </div>
                 )}
-                {digest.map(({ hash, label, time }) => (
-                  <div key={hash} className="flex items-start gap-3">
+                {digest.map(({ hash, label, time }, i) => (
+                  <div key={`${hash}-${i}`} className="flex items-start gap-3">
                     <div className="w-1.5 h-1.5 rounded-full mt-1.5 flex-shrink-0" style={{ background: "#4A7C5F" }}/>
                     <div className="flex-1">
                       <div style={{ fontFamily: "var(--font-mono)", fontSize: "0.65rem", color: "#3A6B9B" }}>{hash}</div>
@@ -1438,7 +1438,15 @@ function CitizenDashboard({ onNavigate }: { onNavigate: (p: Page) => void }) {
                   </div>
                 ))}
               </div>
-              <button onClick={() => onNavigate("verification")} className="mt-4 w-full py-2 border hover:bg-[#EDE5D4] transition-colors"
+              <button onClick={() => {
+                // Always verify THIS citizen's own latest complaint, not a stale selection
+                // from another account. Fixes "same record on each citizen account".
+                const mineIds = new Set([...filed.map(f => f.id), ...supportedRaw.map(s => s.id)]);
+                if ((!civic.selectedId || !mineIds.has(civic.selectedId)) && filed.length) {
+                  civic.select(filed[0].id, filed[0].tracking_code);
+                }
+                onNavigate("verification");
+              }} className="mt-4 w-full py-2 border hover:bg-[#EDE5D4] transition-colors"
                 style={{ borderColor: "#C8B89A", color: "#1C0A00", borderRadius: "1px",
                   fontFamily: "var(--font-mono)", fontSize: "0.58rem", letterSpacing: "0.1em", textTransform: "uppercase" }}>
                 Verify Records →
@@ -4462,12 +4470,12 @@ function ComplaintDetailPage({ onNavigate }: { onNavigate: (p: Page) => void }) 
                   <circle cx="300" cy="100" r="4" fill="white"/>
                   {/* Label */}
                   <rect x="215" y="70" width="170" height="22" rx="1" fill="rgba(28,10,0,0.75)"/>
-                  <text x="300" y="85" textAnchor="middle" fill="#F5F0E8" fontSize="9" fontFamily="monospace">Sector X · Major Pothole</text>
+                  <text x="300" y="85" textAnchor="middle" fill="#F5F0E8" fontSize="9" fontFamily="monospace">{displayComplaint ? `${displayComplaint.trackingCode} · ${displayComplaint.description.slice(0, 28)}` : "Select a complaint"}</text>
                 </svg>
               </div>
               <div className="px-6 py-3 border-t flex items-center justify-between" style={{ borderColor: "#C8B89A" }}>
                 <span style={{ fontFamily: "var(--font-body)", fontSize: "0.78rem", color: "#5C4A32", opacity: 0.65 }}>
-                  28.6139°N 77.2090°E
+                  {displayComplaint ? `${displayComplaint.lat.toFixed(4)}°N ${displayComplaint.lng.toFixed(4)}°E` : "—"}
                 </span>
                 <button onClick={() => onNavigate("civic-map")} className="flex items-center gap-1.5 hover:opacity-70 transition-opacity"
                   style={{ fontFamily: "var(--font-mono)", fontSize: "0.56rem", letterSpacing: "0.08em", textTransform: "uppercase", color: "#3A6B9B" }}>
@@ -4491,11 +4499,11 @@ function ComplaintDetailPage({ onNavigate }: { onNavigate: (p: Page) => void }) 
               </div>
               <div className="px-5 py-2">
                 {[
-                  { label: "Category",  value: "Roads & Infrastructure" },
-                  { label: "Priority",  value: "Urgent" },
-                  { label: "Location",  value: "Sector X, New Delhi" },
-                  { label: "Submitted", value: "13 Sep 2026" },
-                  { label: "Supporting", value: "17 Citizens" },
+                  { label: "Category",  value: displayComplaint?.category || "—" },
+                  { label: "Priority",  value: displayComplaint?.priority || "—" },
+                  { label: "Location",  value: displayComplaint ? `${displayComplaint.lat.toFixed(4)}°N ${displayComplaint.lng.toFixed(4)}°E` : "—" },
+                  { label: "Submitted", value: displayComplaint ? new Date(displayComplaint.createdAt).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "—" },
+                  { label: "Supporting", value: displayComplaint ? `${displayComplaint.supportCount} Citizens` : "—" },
                 ].map(({ label, value }, i, arr) => (
                   <div key={label} className="flex items-start justify-between gap-3 py-3"
                     style={{ borderBottom: i < arr.length - 1 ? "1px solid #EDE5D4" : "none" }}>
@@ -4527,11 +4535,11 @@ function ComplaintDetailPage({ onNavigate }: { onNavigate: (p: Page) => void }) 
                       strokeDashoffset={2 * Math.PI * 28 * 0.25}
                       strokeLinecap="round"
                       style={{ transform: "rotate(-90deg)", transformOrigin: "36px 36px" }}/>
-                    <text x="36" y="40" textAnchor="middle" fontFamily="var(--font-display)" fontSize="16" fontWeight="700" fill="#1C0A00">87</text>
+                    <text x="36" y="40" textAnchor="middle" fontFamily="var(--font-display)" fontSize="16" fontWeight="700" fill="#1C0A00">{displayComplaint ? Math.min(99, 50 + displayComplaint.supportCount * 8) : 87}</text>
                   </svg>
                   <div>
                     <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontStyle: "italic", fontSize: "2rem", color: "#1C0A00", lineHeight: 1 }}>
-                      87<span style={{ fontSize: "1rem", opacity: 0.3 }}> / 100</span>
+                      {displayComplaint ? Math.min(99, 50 + displayComplaint.supportCount * 8) : 87}<span style={{ fontSize: "1rem", opacity: 0.3 }}> / 100</span>
                     </div>
                     <div style={{ fontFamily: "var(--font-mono)", fontSize: "0.52rem", color: "#5C4A32", opacity: 0.45, marginTop: 3 }}>
                       High civic concern
@@ -4540,9 +4548,9 @@ function ComplaintDetailPage({ onNavigate }: { onNavigate: (p: Page) => void }) 
                 </div>
                 {/* Breakdown */}
                 {[
-                  { label: "Supporting Citizens", value: "17" },
-                  { label: "Priority",            value: "Urgent" },
-                  { label: "Time Unresolved",     value: "3 days" },
+                  { label: "Supporting Citizens", value: String(displayComplaint?.supportCount ?? "—") },
+                  { label: "Priority",            value: displayComplaint?.priority || "—" },
+                  { label: "Time Unresolved",     value: displayComplaint ? `${daysOpen(displayComplaint.createdAt)} days` : "—" },
                   { label: "Affected Area",        value: "High" },
                   { label: "Escalation History",   value: "0" },
                 ].map(({ label, value }, i, arr) => (
@@ -4586,7 +4594,7 @@ function ComplaintDetailPage({ onNavigate }: { onNavigate: (p: Page) => void }) 
                 <p style={{ fontFamily: "var(--font-mono)", fontSize: "0.53rem", color: "#5C4A32", opacity: 0.5, lineHeight: 1.5, marginTop: 12, letterSpacing: "0.04em" }}>
                   Important lifecycle events are backed by verifiable blockchain records.
                 </p>
-                <button onClick={triggerToast}
+                <button onClick={handleViewVerification}
                   className="w-full py-2.5 mt-2 flex items-center justify-center gap-1.5 hover:opacity-90 transition-opacity"
                   style={{ background: "#1C0A00", color: "#F5F0E8", borderRadius: "1px",
                     fontFamily: "var(--font-mono)", fontSize: "0.58rem", letterSpacing: "0.1em", textTransform: "uppercase" }}>
@@ -6576,9 +6584,9 @@ function VerificationPage({ onNavigate }: { onNavigate: (p: Page) => void }) {
           {/* Complaint identity strip */}
           <div className="flex flex-wrap items-stretch border overflow-hidden" style={{ borderColor: "#C8B89A", borderRadius: "2px", display: "inline-flex" }}>
             {[
-              { label: "Complaint", value: "#CTY-48291-X", mono: true, accent: "#3A6B9B" },
-              { label: "Issue",     value: "Major Pothole", mono: false, accent: "#1C0A00" },
-              { label: "Status",    value: "IN PROGRESS",   mono: true,  accent: "#3A6B9B" },
+              { label: "Complaint", value: `#${live?.complaint?.tracking_code || civic.selectedCode || "CTY-48291-X"}`, mono: true, accent: "#3A6B9B" },
+              { label: "Issue",     value: live?.complaint ? (live.complaint.description || CATEGORY_LABELS[live.complaint.category] || live.complaint.category) : "Major Pothole", mono: false, accent: "#1C0A00" },
+              { label: "Status",    value: live?.complaint ? (STATUS_UI[live.complaint.status] ?? live.complaint.status) : "IN PROGRESS",   mono: true,  accent: "#3A6B9B" },
             ].map(({ label, value, mono, accent }, i) => (
               <div key={label} className="px-6 py-3 border-r last:border-r-0" style={{ background: "#FAF7F2", borderColor: "#C8B89A" }}>
                 <div style={{ fontFamily: "var(--font-mono)", fontSize: "0.48rem", letterSpacing: "0.12em", textTransform: "uppercase", color: "#5C4A32", opacity: 0.4, marginBottom: 3 }}>{label}</div>
@@ -6627,16 +6635,16 @@ function VerificationPage({ onNavigate }: { onNavigate: (p: Page) => void }) {
                 Key complaint events have been recorded and can be independently verified.
               </div>
               <p style={{ fontFamily: "var(--font-body)", fontSize: "0.84rem", color: "#5C4A32", opacity: 0.65, lineHeight: 1.6 }}>
-                Important lifecycle milestones for complaint CTY-48291-X are stored in a tamper-resistant record. Anyone can independently confirm that these events occurred as stated.
+                Important lifecycle milestones for complaint {live?.complaint?.tracking_code || civic.selectedCode || "CTY-48291-X"} are stored in a tamper-resistant record. Anyone can independently confirm that these events occurred as stated.
               </p>
             </div>
 
             {/* Stats */}
             <div className="flex md:flex-col gap-0 border overflow-hidden flex-shrink-0" style={{ borderColor: "#C8B89A", borderRadius: "1px" }}>
               {[
-                { label: "Events Recorded",    value: "4" },
+                { label: "Events Recorded",    value: String(events.length || 4) },
                 { label: "Evidence Records",   value: "1" },
-                { label: "Verification Status",value: "VALID" },
+                { label: "Verification Status",value: live ? (live.valid ? "VALID" : "BROKEN") : "VALID" },
               ].map(({ label, value }, i, arr) => (
                 <div key={label} className="px-5 py-3 text-center border-b last:border-b-0" style={{ borderColor: "#C8B89A", background: i === 2 ? "#EEF4F0" : "#FAF7F2" }}>
                   <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: i === 2 ? "0.75rem" : "1.8rem", color: i === 2 ? "#4A7C5F" : "#1C0A00", lineHeight: 1, letterSpacing: i === 2 ? "0.05em" : 0 }}>{value}</div>
@@ -6657,7 +6665,7 @@ function VerificationPage({ onNavigate }: { onNavigate: (p: Page) => void }) {
             <section className="border overflow-hidden" style={{ borderColor: "#C8B89A", borderRadius: "2px", background: "#FAF7F2" }}>
               <div className="px-6 py-5 border-b flex items-center justify-between" style={{ borderColor: "#C8B89A" }}>
                 <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontStyle: "italic", fontSize: "1.2rem", color: "#1C0A00" }}>Verified Event History</h2>
-                <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.52rem", letterSpacing: "0.1em", textTransform: "uppercase", color: "#5C4A32", opacity: 0.4 }}>4 recorded events</span>
+                <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.52rem", letterSpacing: "0.1em", textTransform: "uppercase", color: "#5C4A32", opacity: 0.4 }}>{events.length || 4} recorded events</span>
               </div>
 
               <div className="px-6 py-6">
@@ -6744,7 +6752,7 @@ function VerificationPage({ onNavigate }: { onNavigate: (p: Page) => void }) {
                                       { k: "Event",      v: ev.label },
                                       { k: "Timestamp",  v: ev.date },
                                       { k: "Reference",  v: ev.ref },
-                                      { k: "Record ID",  v: "CTY-48291-X" },
+                                      { k: "Record ID",  v: live?.complaint?.tracking_code || civic.selectedCode || "CTY-48291-X" },
                                     ].map(({ k, v }) => (
                                       <div key={k} className="flex gap-4">
                                         <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.54rem", letterSpacing: "0.06em", color: "#5C4A32", opacity: 0.45, minWidth: 80 }}>{k}</span>
@@ -6775,8 +6783,8 @@ function VerificationPage({ onNavigate }: { onNavigate: (p: Page) => void }) {
                   <div className="space-y-0">
                     {[
                       { label: "Type",     value: "Citizen-submitted photograph" },
-                      { label: "Captured", value: "13 Sep 2026 · 14:32" },
-                      { label: "Location", value: "Sector X, New Delhi" },
+                      { label: "Captured", value: live?.complaint ? new Date(live.complaint.created_at).toLocaleString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" }) : "13 Sep 2026 · 14:32" },
+                      { label: "Location", value: live?.complaint ? `${live.complaint.lat.toFixed(4)}°N ${live.complaint.lng.toFixed(4)}°E` : "Sector X, New Delhi" },
                     ].map(({ label, value }, i, arr) => (
                       <div key={label} className="flex justify-between items-start gap-4 py-3"
                         style={{ borderBottom: i < arr.length - 1 ? "1px solid #EDE5D4" : "none" }}>
@@ -11059,6 +11067,23 @@ function AuthorityComplaintDetailPage({ onNavigate }: { onNavigate: (p: Page) =>
   const [successMsg, setSuccessMsg] = useState("");
 
   const civic = useCivic();
+  const liveDetail = useLiveVerification(civic.selectedId);
+  const detailComplaint = liveDetail?.complaint ?? null;
+  const detailEvents = liveDetail?.events ?? [];
+  const displayDetail = detailComplaint ? {
+    trackingCode: detailComplaint.tracking_code,
+    category: CATEGORY_LABELS[detailComplaint.category] || detailComplaint.category,
+    description: detailComplaint.description || CATEGORY_LABELS[detailComplaint.category] || detailComplaint.category,
+    priority: PRIORITY_UI[detailComplaint.priority] ?? "NORMAL",
+    status: STATUS_UI[detailComplaint.status] ?? detailComplaint.status,
+    rawStatus: detailComplaint.status,
+    lat: detailComplaint.lat,
+    lng: detailComplaint.lng,
+    supportCount: detailComplaint.support_count,
+    createdAt: detailComplaint.created_at,
+    lastActionAt: detailComplaint.last_action_at,
+  } : null;
+  const lastDetailHash = detailEvents.length ? detailEvents[detailEvents.length - 1].this_hash : null;
 
   const [timeline, setTimeline] = useState([
     { label: "REPORTED",    time: "Today · 8:42 AM",  done: true },
@@ -11070,6 +11095,30 @@ function AuthorityComplaintDetailPage({ onNavigate }: { onNavigate: (p: Page) =>
   ]);
 
   useEffect(() => { const t = setTimeout(() => setEntered(true), 60); return () => clearTimeout(t); }, []);
+
+  // Sync local UI state from the actually-selected complaint (fixes "always fallen tree").
+  useEffect(() => {
+    if (displayDetail) {
+      const mapped: CaseStatus =
+        displayDetail.rawStatus === "REPORTED" ? "Unresolved"
+        : displayDetail.rawStatus === "ASSESSED" ? "Assessed"
+        : displayDetail.rawStatus === "IN_PROGRESS" ? "In Progress"
+        : displayDetail.rawStatus === "RESOLVED" ? "Resolved"
+        : displayDetail.rawStatus === "DISPUTED" ? "Disputed"
+        : "Unresolved";
+      setCaseStatus(mapped);
+      if (detailEvents.length) {
+        setTimeline(detailEvents.map((ev) => ({
+          label: (STATUS_UI[ev.to_status] ?? ev.to_status),
+          time: timeAgo(ev.created_at),
+          done: true,
+        })));
+      }
+      if (displayDetail.rawStatus === "RESOLVED") { setResolved(true); setProofSubmitted(true); }
+      if (displayDetail.rawStatus === "DISPUTED") { setDisputed(true); }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [civic.selectedId, liveDetail?.complaint?.id, liveDetail?.events?.length]);
 
   function showSuccess(msg: string) {
     setSuccessMsg(msg);
@@ -11160,7 +11209,7 @@ function AuthorityComplaintDetailPage({ onNavigate }: { onNavigate: (p: Page) =>
             Complaint Queue
           </button>
           <span style={{ color: "#C8B89A" }}>/</span>
-          <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.55rem", letterSpacing: "0.1em", color: "#1C0A00" }}>CTY-48291-X</span>
+          <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.55rem", letterSpacing: "0.1em", color: "#1C0A00" }}>{displayDetail?.trackingCode || civic.selectedCode || "Select a complaint"}</span>
         </div>
 
         <div className="h-px mb-7" style={{ background: "linear-gradient(to right, #C8B89A, transparent)" }} />
@@ -11185,22 +11234,22 @@ function AuthorityComplaintDetailPage({ onNavigate }: { onNavigate: (p: Page) =>
             <div className="border p-6 relative" style={{ background: "#FAF7F2", borderColor: "#C8B89A", borderRadius: "1px" }}>
               <div className="absolute top-0 right-0 w-7 h-7 border-l border-b" style={{ borderColor: "#C8B89A" }} />
               <div style={{ fontFamily: "var(--font-mono)", fontSize: "0.52rem", letterSpacing: "0.14em", textTransform: "uppercase", color: "#5C4A32", opacity: 0.55, marginBottom: "6px" }}>
-                Complaint Detail · CTY-48291-X
+                Complaint Detail · {displayDetail?.trackingCode || civic.selectedCode || "—"}
               </div>
               <h1 className="font-display font-bold leading-tight mb-4" style={{ fontSize: "clamp(1.4rem, 2.5vw, 1.9rem)", color: "#1C0A00" }}>
-                Fallen Tree Blocking Road
+                {displayDetail?.description || "Select a complaint from the queue"}
               </h1>
               <div className="flex flex-wrap items-center gap-2.5 mb-5">
-                <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.5rem", letterSpacing: "0.1em", textTransform: "uppercase", background: "#EDE5D4", color: "#5C4A32", padding: "3px 8px", borderRadius: "1px" }}>Public Safety</span>
-                <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.5rem", letterSpacing: "0.12em", textTransform: "uppercase", background: "#9B3A3A", color: "#FAF7F2", padding: "3px 8px", borderRadius: "1px" }}>VERY URGENT</span>
-                <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.5rem", letterSpacing: "0.1em", textTransform: "uppercase", color: statusColors[caseStatus] ?? "#5C4A32", borderBottom: `1px solid ${statusColors[caseStatus] ?? "#C8B89A"}`, paddingBottom: "1px" }}>{caseStatus}</span>
+                <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.5rem", letterSpacing: "0.1em", textTransform: "uppercase", background: "#EDE5D4", color: "#5C4A32", padding: "3px 8px", borderRadius: "1px" }}>{displayDetail?.category || "—"}</span>
+                <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.5rem", letterSpacing: "0.12em", textTransform: "uppercase", background: "#9B3A3A", color: "#FAF7F2", padding: "3px 8px", borderRadius: "1px" }}>{displayDetail?.priority || "—"}</span>
+                <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.5rem", letterSpacing: "0.1em", textTransform: "uppercase", color: statusColors[caseStatus] ?? "#5C4A32", borderBottom: `1px solid ${statusColors[caseStatus] ?? "#C8B89A"}`, paddingBottom: "1px" }}>{displayDetail?.status || caseStatus}</span>
               </div>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4 pt-4 border-t" style={{ borderColor: "#EDE5D4" }}>
                 {[
-                  { l: "Reported",           v: "Today · 8:42 AM" },
-                  { l: "Location",           v: "Saket, New Delhi" },
-                  { l: "Supporting Reports", v: "17 citizens" },
-                  { l: "Civic Impact",       v: "87 / 100" },
+                  { l: "Reported",           v: displayDetail ? timeAgo(displayDetail.createdAt) : "—" },
+                  { l: "Location",           v: displayDetail ? `${displayDetail.lat.toFixed(4)}°N ${displayDetail.lng.toFixed(4)}°E` : "—" },
+                  { l: "Supporting Reports", v: displayDetail ? `${displayDetail.supportCount} citizens` : "—" },
+                  { l: "Civic Impact",       v: displayDetail ? `${Math.min(99, 50 + displayDetail.supportCount * 8)} / 100` : "—" },
                 ].map(({ l, v }) => (
                   <div key={l}>
                     <div style={{ fontFamily: "var(--font-mono)", fontSize: "0.46rem", letterSpacing: "0.12em", textTransform: "uppercase", color: "#5C4A32", opacity: 0.5, marginBottom: "3px" }}>{l}</div>
@@ -11229,11 +11278,11 @@ function AuthorityComplaintDetailPage({ onNavigate }: { onNavigate: (p: Page) =>
                 <div className="grid grid-cols-2 gap-3 mb-4">
                   <div>
                     <div style={{ fontFamily: "var(--font-mono)", fontSize: "0.46rem", letterSpacing: "0.12em", textTransform: "uppercase", color: "#5C4A32", opacity: 0.5, marginBottom: "3px" }}>Location</div>
-                    <div style={{ fontFamily: "var(--font-body)", fontSize: "0.8rem", color: "#1C0A00" }}>Saket, New Delhi</div>
+                    <div style={{ fontFamily: "var(--font-body)", fontSize: "0.8rem", color: "#1C0A00" }}>{displayDetail ? `${displayDetail.lat.toFixed(4)}°N ${displayDetail.lng.toFixed(4)}°E` : "—"}</div>
                   </div>
                   <div>
                     <div style={{ fontFamily: "var(--font-mono)", fontSize: "0.46rem", letterSpacing: "0.12em", textTransform: "uppercase", color: "#5C4A32", opacity: 0.5, marginBottom: "3px" }}>Captured</div>
-                    <div style={{ fontFamily: "var(--font-body)", fontSize: "0.8rem", color: "#1C0A00" }}>Today · 8:40 AM</div>
+                    <div style={{ fontFamily: "var(--font-body)", fontSize: "0.8rem", color: "#1C0A00" }}>{displayDetail ? new Date(displayDetail.createdAt).toLocaleString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" }) : "—"}</div>
                   </div>
                 </div>
                 <div className="flex items-center justify-between pt-3 border-t" style={{ borderColor: "#EDE5D4" }}>
@@ -11241,7 +11290,7 @@ function AuthorityComplaintDetailPage({ onNavigate }: { onNavigate: (p: Page) =>
                     <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M6.5 1L11 3.5V7C11 10 6.5 12 6.5 12C6.5 12 2 10 2 7V3.5L6.5 1Z" stroke="#4A7C5F" strokeWidth="1" fill="none"/><path d="M4.5 7L5.8 8.3L8.5 6" stroke="#4A7C5F" strokeWidth="1" strokeLinecap="round"/></svg>
                     <div>
                       <div style={{ fontFamily: "var(--font-mono)", fontSize: "0.5rem", letterSpacing: "0.1em", textTransform: "uppercase", color: "#4A7C5F" }}>Evidence hash recorded</div>
-                      <div style={{ fontFamily: "var(--font-mono)", fontSize: "0.5rem", color: "#5C4A32", opacity: 0.6, letterSpacing: "0.06em", marginTop: "1px" }}>0x7A91...C42E</div>
+                      <div style={{ fontFamily: "var(--font-mono)", fontSize: "0.5rem", color: "#5C4A32", opacity: 0.6, letterSpacing: "0.06em", marginTop: "1px" }}>{lastDetailHash ? `0x${lastDetailHash.slice(0, 6)}…${lastDetailHash.slice(-4)}` : "pending"}</div>
                     </div>
                   </div>
                   <button onClick={() => onNavigate("verification")}
@@ -11299,7 +11348,7 @@ function AuthorityComplaintDetailPage({ onNavigate }: { onNavigate: (p: Page) =>
                 </div>
                 <div className="flex items-center justify-between pt-3 border-t" style={{ borderColor: "#EDE5D4" }}>
                   <div>
-                    <div style={{ fontFamily: "var(--font-mono)", fontSize: "0.48rem", color: "#5C4A32", opacity: 0.5, letterSpacing: "0.08em" }}>Last event · Today · 12:42 PM · 0x7A91...C42E</div>
+                    <div style={{ fontFamily: "var(--font-mono)", fontSize: "0.48rem", color: "#5C4A32", opacity: 0.5, letterSpacing: "0.08em" }}>Last event · {displayDetail ? timeAgo(displayDetail.lastActionAt) : "—"}{lastDetailHash ? ` · 0x${lastDetailHash.slice(0, 6)}…${lastDetailHash.slice(-4)}` : ""}</div>
                   </div>
                   <button onClick={() => onNavigate("verification")}
                     className="px-3 py-1.5 border hover:bg-[#EDE5D4] transition-colors"
@@ -11384,12 +11433,12 @@ function AuthorityComplaintDetailPage({ onNavigate }: { onNavigate: (p: Page) =>
               </div>
               <div className="px-5 py-4 space-y-3">
                 {[
-                  { l: "Complaint ID",       v: "CTY-48291-X" },
-                  { l: "Department",         v: "Roads & Infrastructure" },
+                  { l: "Complaint ID",       v: displayDetail?.trackingCode || "—" },
+                  { l: "Department",         v: displayDetail?.category || "—" },
                   { l: "Response Window",    v: "4 hours" },
-                  { l: "Time Elapsed",       v: "6h 12m" },
-                  { l: "Priority",           v: "VERY URGENT" },
-                  { l: "Current Status",     v: caseStatus },
+                  { l: "Time Elapsed",       v: displayDetail ? timeAgo(displayDetail.createdAt) : "—" },
+                  { l: "Priority",           v: displayDetail?.priority || "—" },
+                  { l: "Current Status",     v: displayDetail?.status || caseStatus },
                 ].map(({ l, v }) => (
                   <div key={l} className="flex justify-between gap-2 items-start">
                     <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.48rem", letterSpacing: "0.1em", textTransform: "uppercase", color: "#5C4A32", opacity: 0.55 }}>{l}</span>

@@ -115,6 +115,10 @@ export function CivicProvider({ children }: { children: ReactNode }) {
       localStorage.setItem("civictrace_user", JSON.stringify(res.user));
       setToken(res.token);
       setUser(res.user);
+      // Clear any complaint selected by a previous account so verification
+      // pages never show another citizen's record.
+      setSelectedId(null);
+      setSelectedCode(null);
       return true;
     } catch (e) {
       setAuthError(e instanceof Error ? e.message : "Login failed");
@@ -127,6 +131,8 @@ export function CivicProvider({ children }: { children: ReactNode }) {
     localStorage.removeItem("civictrace_user");
     setToken(null);
     setUser(null);
+    setSelectedId(null);
+    setSelectedCode(null);
   }, []);
 
   const setDraft = useCallback((patch: Partial<ReportDraft>) => {
