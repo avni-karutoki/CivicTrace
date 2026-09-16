@@ -964,6 +964,7 @@ function CitizenDashboard({ onNavigate }: { onNavigate: (p: Page) => void }) {
   const filed = mine?.filed ?? [];
   const supportedRaw = mine?.supported ?? [];
   const activity = mine?.activity ?? [];
+  const [showAllNotif, setShowAllNotif] = useState(false);
 
   const complaints = filed.map(toCardComplaint).map(c => ({ ...c, timeline: ["Reported"], activeStep: 0 }));
   const supported = supportedRaw.map(b => {
@@ -1359,7 +1360,12 @@ function CitizenDashboard({ onNavigate }: { onNavigate: (p: Page) => void }) {
                 </span>
               </div>
               <div className="divide-y" style={{ borderColor: "#EDE5D4" }}>
-                {notifications.map((n, i) => (
+                {notifications.length === 0 && (
+                  <div className="px-5 py-4 text-center" style={{ fontFamily: "var(--font-body)", fontSize: "0.78rem", color: "#5C4A32", opacity: 0.6 }}>
+                    No recent activity. File or support a report to get updates here.
+                  </div>
+                )}
+                {(showAllNotif ? notifications : notifications.slice(0, 5)).map((n, i) => (
                   <div key={i} className="flex gap-3 px-5 py-3.5 hover:bg-[#EDE5D4] transition-colors cursor-pointer">
                     <div className="w-6 h-6 rounded-full border flex items-center justify-center flex-shrink-0 mt-0.5"
                       style={{ borderColor: n.color + "40", background: n.color + "15" }}>
@@ -1372,11 +1378,13 @@ function CitizenDashboard({ onNavigate }: { onNavigate: (p: Page) => void }) {
                   </div>
                 ))}
               </div>
-              <div className="px-5 py-3 border-t" style={{ borderColor: "#C8B89A" }}>
-                <button onClick={() => onNavigate("my-complaints")} style={{ fontFamily: "var(--font-mono)", fontSize: "0.58rem", letterSpacing: "0.08em", textTransform: "uppercase", color: "#3A6B9B", opacity: 0.7 }}>
-                  View all activity →
-                </button>
-              </div>
+              {notifications.length > 5 && (
+                <div className="px-5 py-3 border-t" style={{ borderColor: "#C8B89A" }}>
+                  <button onClick={() => setShowAllNotif(v => !v)} style={{ fontFamily: "var(--font-mono)", fontSize: "0.58rem", letterSpacing: "0.08em", textTransform: "uppercase", color: "#3A6B9B", opacity: 0.7 }}>
+                    {showAllNotif ? "← Show less" : `View all activity (${notifications.length}) →`}
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* ── MY CIVIC IDENTITY ── */}
