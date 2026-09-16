@@ -4057,6 +4057,44 @@ function MyComplaintsPage({ onNavigate, openDetail = false }: { onNavigate: (p: 
   );
 }
 
+// Collapse raw hash-chain events into a readable lifecycle timeline: one entry
+// per stage change. Dedup-merge / support noise (one event per nearby duplicate
+// report) rolls into a single community-support entry instead of flooding the UI.
+interface LifecycleRow {
+  label: string; time: string; note: string | null;
+  done: boolean; current: boolean; hash: string; supportCount: number;
+}
+
+function buildLifecycleTimeline(events: { from_status: string | null; to_status: string; created_at: string; note: string | null; this_hash: string }[]): { rows: LifecycleRow[]; mergeCount: number } {
+  if (!events.length) return { rows: [], mergeCount: 0 };
+  const SUPPORT_RE = /merg|support/i;
+  const merges = events.filter(ev => SUPPORT_RE.test(ev.note ?? ""));
+  const stages = events.filter((ev, i) => i === 0 || ev.to_status !== events[i - 1].to_status);
+  const rows: LifecycleRow[] = stages.map(ev => ({
+    label: STATUS_UI[ev.to_status] ?? ev.to_status,
+    time: timeAgo(ev.created_at),
+    note: ev.note,
+    done: true,
+    current: false,
+    hash: ev.this_hash,
+    supportCount: 0,
+  }));
+  if (merges.length) {
+    const latest = merges[merges.length - 1];
+    rows.splice(1, 0, {
+      label: "COMMUNITY SUPPORT",
+      time: timeAgo(latest.created_at),
+      note: null,
+      done: true,
+      current: false,
+      hash: latest.this_hash,
+      supportCount: merges.length,
+    });
+  }
+  rows.forEach((r, i) => { r.current = i === rows.length - 1; });
+  return { rows, mergeCount: merges.length };
+}
+
 // ─── PAGE 10 — Complaint Detail ───────────────────────────────────────────────
 function ComplaintDetailPage({ onNavigate }: { onNavigate: (p: Page) => void }) {
   const [supported, setSupported] = useState(false);
@@ -4084,17 +4122,21 @@ function ComplaintDetailPage({ onNavigate }: { onNavigate: (p: Page) => void }) 
     departmentId: complaint.department_id,
   } : null;
 
-  // Build timeline from actual events
-  const timelineEvents = events.length > 0 ? events.map((ev, i) => ({
-    status: STATUS_UI[ev.to_status] ?? ev.to_status,
-    date: timeAgo(ev.created_at),
-    desc: ev.note || `Status updated to ${STATUS_UI[ev.to_status] ?? ev.to_status}`,
+  // Build timeline from actual events (collapsed: one entry per stage change,
+  // duplicate-report noise rolled into a single community-support entry).
+  const { rows: lifecycleRows } = buildLifecycleTimeline(events);
+  const timelineEvents = lifecycleRows.length > 0 ? lifecycleRows.map(r => ({
+    status: r.label,
+    date: r.time,
+    desc: r.label === "COMMUNITY SUPPORT"
+      ? `${r.supportCount} nearby citizen report${r.supportCount === 1 ? "" : "s"} merged into this verified record`
+      : (r.note || `Status updated to ${r.label}`),
     done: true,
-    current: i === events.length - 1,
-    hash: ev.this_hash,
-    txHash: ev.tx_hash,
+    current: r.current,
+    hash: r.hash,
+    txHash: null as string | null,
   })) : [
-    { status: "REPORTED", date: displayComplaint ? timeAgo(displayComplaint.createdAt) : "Just now", desc: "Complaint filed", done: true },
+    { status: "REPORTED", date: displayComplaint ? timeAgo(displayComplaint.createdAt) : "Just now", desc: "Complaint filed", done: true, current: false, hash: "", txHash: null as string | null },
   ];
 
   const currentStatus = displayComplaint?.status || "REPORTED";
@@ -11147,9 +11189,10 @@ function AuthorityComplaintDetailPage({ onNavigate }: { onNavigate: (p: Page) =>
         : "Unresolved";
       setCaseStatus(mapped);
       if (detailEvents.length) {
-        setTimeline(detailEvents.map((ev) => ({
-          label: (STATUS_UI[ev.to_status] ?? ev.to_status),
-          time: timeAgo(ev.created_at),
+        const { rows } = buildLifecycleTimeline(detailEvents);
+        setTimeline(rows.map((r) => ({
+          label: r.label === "COMMUNITY SUPPORT" ? `SUPPORT ×${r.supportCount}` : r.label,
+          time: r.time,
           done: true,
         })));
       }
