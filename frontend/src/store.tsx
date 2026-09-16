@@ -8,8 +8,12 @@ import type { BackendComplaint, BackendUser } from "./api/civictrace";
 interface AuthState {
   user: BackendUser | null;
   token: string | null;
-  /** Best-effort login: resolves true on success, false when backend unreachable. */
-  login: (name: string, contact: string, role?: string) => Promise<boolean>;
+  /**
+   * Password-verified login. Resolves the user on success; throws an Error
+   * with the backend message (wrong password, unknown email, unreachable…)
+   * so pages can display it directly.
+   */
+  login: (name: string, contact: string, role?: string, password?: string) => Promise<BackendUser>;
   logout: () => void;
   authError: string;
 }
@@ -111,10 +115,10 @@ export function CivicProvider({ children }: { children: ReactNode }) {
     );
   }, []);
 
-  const login = useCallback(async (name: string, contact: string, role?: string) => {
+  const login = useCallback(async (name: string, contact: string, role?: string, password?: string) => {
     setAuthError("");
     try {
-      const res = await api.login(name, contact, role);
+      const res = await api.login(name, contact, role, password);
       localStorage.setItem("civictrace_token", res.token);
       localStorage.setItem("civictrace_user", JSON.stringify(res.user));
       setToken(res.token);
@@ -123,10 +127,11 @@ export function CivicProvider({ children }: { children: ReactNode }) {
       // pages never show another citizen's record.
       setSelectedId(null);
       setSelectedCode(null);
-      return true;
+      return res.user;
     } catch (e) {
-      setAuthError(e instanceof Error ? e.message : "Login failed");
-      return false;
+      const message = e instanceof Error ? e.message : "Login failed";
+      setAuthError(message);
+      throw new Error(message);
     }
   }, []);
 

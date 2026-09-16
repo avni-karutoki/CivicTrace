@@ -125,8 +125,8 @@ const post = (endpoint: string, body: unknown) =>
   apiFetch(endpoint, { method: "POST", body: JSON.stringify(body) });
 
 export const api = {
-  login: (name: string, contact: string, role?: string): Promise<{ token: string; user: BackendUser }> =>
-    post("/auth/login", { name, contact, role }),
+  login: (name: string, contact: string, role?: string, password?: string): Promise<{ token: string; user: BackendUser }> =>
+    post("/auth/login", { name, contact, role, password }),
 
   createComplaint: (body: {
     category: string;

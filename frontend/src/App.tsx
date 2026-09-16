@@ -131,55 +131,45 @@ function CivicIllustration() {
 // ─── Auth Page ────────────────────────────────────────────────────────────────
 function AuthPage({ onBack, onSuccess }: { onBack: () => void; onSuccess?: () => void }) {
   const [mode, setMode] = useState<"login" | "signup">("login");
-  const [method, setMethod] = useState<"email" | "phone">("email");
-  const [step, setStep] = useState<"credentials" | "otp">("credentials");
   const [email, setEmail] = useState("");
-  const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
-  const [otp, setOtp] = useState(["", "", "", "", "", ""]);
   const [showPass, setShowPass] = useState(false);
   const [name, setName] = useState("");
   const [loading, setLoading] = useState(false);
-  const [sent, setSent] = useState(false);
   const [loginErr, setLoginErr] = useState("");
   const civic = useCivic();
-  const otpRefs = useRef<(HTMLInputElement | null)[]>([]);
-
-  function handleOtpChange(val: string, i: number) {
-    if (!/^\d*$/.test(val)) return;
-    const next = [...otp];
-    next[i] = val.slice(-1);
-    setOtp(next);
-    if (val && i < 5) otpRefs.current[i + 1]?.focus();
-  }
-
-  function handleOtpKey(e: React.KeyboardEvent, i: number) {
-    if (e.key === "Backspace" && !otp[i] && i > 0) otpRefs.current[i - 1]?.focus();
-  }
 
   async function handleContinue() {
-    if (method === "phone" && step === "credentials") {
-      setLoading(true);
-      setTimeout(() => { setLoading(false); setStep("otp"); setSent(true); }, 900);
+    const contact = email.trim();
+    if (mode === "signup" && !name.trim()) {
+      setLoginErr("Please enter your full name to create an account.");
+      return;
+    }
+    if (!contact) {
+      setLoginErr("Email address is required.");
+      return;
+    }
+    if (!password) {
+      setLoginErr("Password is required.");
+      return;
+    }
+    if (password.length < 6) {
+      setLoginErr("Password must be at least 6 characters.");
       return;
     }
     setLoading(true);
     setLoginErr("");
-    const contact = method === "email" ? email.trim() : phone.trim();
-    if (mode === "signup" && !name.trim()) {
+    // Signup stores the typed name once; login verifies the password
+    // server-side and never overwrites the stored name.
+    const displayName = mode === "signup" ? name.trim() : contact;
+    try {
+      await civic.login(displayName, contact, "citizen", password);
       setLoading(false);
-      setLoginErr("Please enter your full name to create an account.");
-      return;
+      onSuccess?.();
+    } catch (e) {
+      setLoading(false);
+      setLoginErr(e instanceof Error ? e.message : "Login failed. Check your connection and retry.");
     }
-    // Signup sends the typed name (stored once); login sends contact as name
-    // which the backend ignores for existing users, preserving stored names.
-    const displayName = mode === "signup" ? name.trim() : contact || "Citizen";
-    // Best-effort backend login (demo auth, no OTP server-side). Always
-    // continue so the demo works even when the backend is unreachable.
-    const ok = await civic.login(displayName, contact || "guest@civictrace.local", "citizen").catch(() => false);
-    setLoading(false);
-    if (!ok) setLoginErr("Backend unreachable — continuing offline. Reports will not be saved.");
-    onSuccess?.();
   }
 
   const inputStyle: React.CSSProperties = {
@@ -307,7 +297,7 @@ function AuthPage({ onBack, onSuccess }: { onBack: () => void; onSuccess?: () =>
                 {/* Mode toggle */}
                 <div className="flex border mb-6" style={{ borderColor: "#C8B89A", borderRadius: "1px" }}>
                   {(["login", "signup"] as const).map(m => (
-                    <button key={m} onClick={() => { setMode(m); setStep("credentials"); setOtp(["","","","","",""]); }}
+                    <button key={m} onClick={() => { setMode(m); setLoginErr(""); }}
                       className="flex-1 py-2 transition-colors"
                       style={{
                         fontFamily: "var(--font-mono)", fontSize: "0.65rem", letterSpacing: "0.1em", textTransform: "uppercase",
@@ -316,34 +306,6 @@ function AuthPage({ onBack, onSuccess }: { onBack: () => void; onSuccess?: () =>
                         borderRadius: "0px",
                       }}>
                       {m === "login" ? "Sign In" : "Create Account"}
-                    </button>
-                  ))}
-                </div>
-
-                {/* Method selector */}
-                <div className="flex gap-2 mb-5">
-                  {(["email", "phone"] as const).map(m => (
-                    <button key={m} onClick={() => { setMethod(m); setStep("credentials"); setOtp(["","","","","",""]); setSent(false); }}
-                      className="flex items-center gap-1.5 px-3 py-1.5 border transition-colors"
-                      style={{
-                        fontFamily: "var(--font-mono)", fontSize: "0.6rem", letterSpacing: "0.1em", textTransform: "uppercase",
-                        borderColor: method === m ? "#1C0A00" : "#C8B89A",
-                        background: method === m ? "#F5F0E8" : "transparent",
-                        color: method === m ? "#1C0A00" : "#5C4A32",
-                        borderRadius: "1px",
-                      }}>
-                      {m === "email" ? (
-                        <svg width="11" height="11" viewBox="0 0 11 11" fill="none">
-                          <rect x="1" y="2.5" width="9" height="6" rx="1" stroke="currentColor" strokeWidth="1"/>
-                          <path d="M1 3.5 L5.5 6.5 L10 3.5" stroke="currentColor" strokeWidth="1"/>
-                        </svg>
-                      ) : (
-                        <svg width="10" height="11" viewBox="0 0 10 11" fill="none">
-                          <rect x="1.5" y="1" width="7" height="9" rx="1.5" stroke="currentColor" strokeWidth="1"/>
-                          <circle cx="5" cy="8.5" r="0.75" fill="currentColor"/>
-                        </svg>
-                      )}
-                      {m === "email" ? "Email" : "Phone"}
                     </button>
                   ))}
                 </div>
@@ -357,80 +319,33 @@ function AuthPage({ onBack, onSuccess }: { onBack: () => void; onSuccess?: () =>
                     </div>
                   )}
 
-                  {step === "credentials" && (
-                    <>
-                      <div>
-                        <label style={labelStyle}>{method === "email" ? "Email Address" : "Phone Number"}</label>
-                        {method === "email" ? (
-                          <input type="email" style={inputStyle} placeholder="you@example.com"
-                            value={email} onChange={e => setEmail(e.target.value)}/>
-                        ) : (
-                          <div className="flex gap-2">
-                            <div className="flex items-center px-3 border" style={{ borderColor: "#C8B89A", background: "#F0E8D8", borderRadius: "1px", fontFamily: "var(--font-mono)", fontSize: "0.8rem", color: "#5C4A32" }}>
-                              +91
-                            </div>
-                            <input type="tel" style={{ ...inputStyle, flex: 1 }} placeholder="98765 43210"
-                              value={phone} onChange={e => setPhone(e.target.value)}/>
-                          </div>
-                        )}
-                      </div>
+                  <div>
+                    <label style={labelStyle}>Email Address</label>
+                    <input type="email" style={inputStyle} placeholder="you@example.com"
+                      value={email} onChange={e => setEmail(e.target.value)}/>
+                  </div>
 
-                      {method === "email" && (
-                        <div>
-                          <label style={labelStyle}>Password</label>
-                          <div className="relative">
-                            <input type={showPass ? "text" : "password"} style={{ ...inputStyle, paddingRight: "40px" }}
-                              placeholder="••••••••" value={password} onChange={e => setPassword(e.target.value)}/>
-                            <button onClick={() => setShowPass(!showPass)} className="absolute right-3 top-1/2 -translate-y-1/2 opacity-40 hover:opacity-70 transition-opacity">
-                              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                                {showPass
-                                  ? <><path d="M1 8 C3 4 13 4 15 8 C13 12 3 12 1 8" stroke="#1C0A00" strokeWidth="1.2"/><circle cx="8" cy="8" r="2" stroke="#1C0A00" strokeWidth="1.2"/></>
-                                  : <><path d="M1 8 C3 4 13 4 15 8 C13 12 3 12 1 8" stroke="#1C0A00" strokeWidth="1.2"/><circle cx="8" cy="8" r="2" stroke="#1C0A00" strokeWidth="1.2"/><path d="M2 2 L14 14" stroke="#1C0A00" strokeWidth="1.2"/></>
-                                }
-                              </svg>
-                            </button>
-                          </div>
-                          {mode === "login" && (
-                            <button className="mt-1.5 opacity-50 hover:opacity-80 transition-opacity"
-                              style={{ fontFamily: "var(--font-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", color: "#3A6B9B", display: "block", marginLeft: "auto" }}>
-                              Forgot password?
-                            </button>
-                          )}
-                        </div>
-                      )}
-                    </>
-                  )}
-
-                  {/* OTP Step */}
-                  {step === "otp" && (
-                    <div>
-                      <label style={labelStyle}>Verification Code</label>
-                      <div style={{ fontFamily: "var(--font-body)", fontSize: "0.8rem", color: "#5C4A32", marginBottom: "12px", opacity: 0.7 }}>
-                        We sent a 6-digit code to {phone || "your phone"}
-                      </div>
-                      <div className="flex gap-2">
-                        {otp.map((digit, i) => (
-                          <input key={i}
-                            ref={el => { otpRefs.current[i] = el; }}
-                            type="text" inputMode="numeric" maxLength={1}
-                            value={digit}
-                            onChange={e => handleOtpChange(e.target.value, i)}
-                            onKeyDown={e => handleOtpKey(e, i)}
-                            style={{
-                              width: "100%", maxWidth: 52, height: 52, textAlign: "center",
-                              border: "1px solid #C8B89A", borderRadius: "1px", background: "#FAF7F2",
-                              color: "#1C0A00", fontFamily: "var(--font-display)", fontWeight: 700, fontSize: "1.2rem",
-                              outline: "none",
-                            }}
-                          />
-                        ))}
-                      </div>
-                      <button className="mt-2 opacity-50 hover:opacity-80 transition-opacity"
-                        style={{ fontFamily: "var(--font-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", color: "#3A6B9B" }}>
-                        Resend code
+                  <div>
+                    <label style={labelStyle}>Password</label>
+                    <div className="relative">
+                      <input type={showPass ? "text" : "password"} style={{ ...inputStyle, paddingRight: "40px" }}
+                        placeholder={mode === "signup" ? "Min. 6 characters" : "••••••••"} value={password} onChange={e => setPassword(e.target.value)}/>
+                      <button onClick={() => setShowPass(!showPass)} className="absolute right-3 top-1/2 -translate-y-1/2 opacity-40 hover:opacity-70 transition-opacity">
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                          {showPass
+                            ? <><path d="M1 8 C3 4 13 4 15 8 C13 12 3 12 1 8" stroke="#1C0A00" strokeWidth="1.2"/><circle cx="8" cy="8" r="2" stroke="#1C0A00" strokeWidth="1.2"/></>
+                            : <><path d="M1 8 C3 4 13 4 15 8 C13 12 3 12 1 8" stroke="#1C0A00" strokeWidth="1.2"/><circle cx="8" cy="8" r="2" stroke="#1C0A00" strokeWidth="1.2"/><path d="M2 2 L14 14" stroke="#1C0A00" strokeWidth="1.2"/></>
+                          }
+                        </svg>
                       </button>
                     </div>
-                  )}
+                    {mode === "login" && (
+                      <button className="mt-1.5 opacity-50 hover:opacity-80 transition-opacity"
+                        style={{ fontFamily: "var(--font-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", color: "#3A6B9B", display: "block", marginLeft: "auto" }}>
+                        Forgot password?
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 {/* Continue button */}
@@ -448,7 +363,7 @@ function AuthPage({ onBack, onSuccess }: { onBack: () => void; onSuccess?: () =>
                   ) : (
                     <>
                       <span className="w-1.5 h-1.5 rounded-full" style={{ background: "#9B3A3A" }}/>
-                      {step === "otp" ? "Verify & Continue" : mode === "login" ? "Continue" : "Create Account"}
+                      {mode === "login" ? "Sign In Securely" : "Create Account"}
                     </>
                   )}
                 </button>
@@ -466,7 +381,7 @@ function AuthPage({ onBack, onSuccess }: { onBack: () => void; onSuccess?: () =>
                 </div>
 
                 {/* Toggle mode */}
-                <button onClick={() => { setMode(mode === "login" ? "signup" : "login"); setStep("credentials"); setOtp(["","","","","",""]); }}
+                <button onClick={() => { setMode(mode === "login" ? "signup" : "login"); setLoginErr(""); }}
                   className="w-full py-2.5 border transition-colors hover:bg-[#EDE5D4]"
                   style={{
                     borderColor: "#C8B89A", color: "#1C0A00", borderRadius: "1px",
@@ -10414,20 +10329,20 @@ function AuthorityLoginPage({ onNavigate }: { onNavigate: (p: Page) => void }) {
     if (!password.trim()) { setPassErr("Password is required."); ok = false; } else setPassErr("");
     if (!ok) return;
     setSignInErr("");
-    // Demo auth: email is the identity (password is not verified server-side).
-    // The backend freezes identity+role at first signup, so an email once used
-    // on the citizen form stays "citizen" — never enter the authority area
-    // with a non-authority account. Verify the saved user before navigating.
+    // Password-verified authority auth. The backend freezes identity+role at
+    // first signup, so an email once used on the citizen form stays
+    // "citizen" — never enter the authority area with a non-authority
+    // account. Verify the saved user before navigating.
     const name = email.trim().split("@")[0] || "Officer";
-    const logged = await civic.login(name, email.trim(), "authority").catch(() => false);
-    let role: string | null = null;
+    let user: { role?: string } | null = null;
     try {
-      const raw = localStorage.getItem("civictrace_user");
-      role = raw ? (JSON.parse(raw) as { role?: string }).role ?? null : null;
-    } catch {
-      role = null;
+      user = await civic.login(name, email.trim(), "authority", password);
+    } catch (e) {
+      setSignInErr(e instanceof Error ? e.message : "Sign-in failed. Check your connection and retry.");
+      return;
     }
-    if (!logged || !role) {
+    const role = user?.role ?? null;
+    if (!role) {
       setSignInErr("Backend unreachable — cannot verify authority access. Check your connection and retry.");
       return;
     }
