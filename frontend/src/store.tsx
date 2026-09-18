@@ -3,13 +3,21 @@ import type { ReactNode } from "react";
 import { api } from "./api/civictrace";
 import type { BackendComplaint, BackendUser } from "./api/civictrace";
 
-// ─── Auth ───
+// ─── Auth (email + OTP, like real websites) ───
+
+export type UserRole = "citizen" | "authority";
 
 interface AuthState {
   user: BackendUser | null;
   token: string | null;
-  /** Best-effort login: resolves true on success, false when backend unreachable. */
-  login: (name: string, contact: string, role?: string) => Promise<boolean>;
+  /** Signup step 1: validate + send OTP to a new email. Throws on error. */
+  signupRequestOtp: (name: string, email: string, role?: UserRole) => Promise<import("./api/civictrace").OtpRequestResponse>;
+  /** Signup step 2: verify OTP → creates the account and signs in. */
+  signupVerifyOtp: (name: string, email: string, otp: string, role?: UserRole) => Promise<boolean>;
+  /** Login step 1: send OTP. Throws NOT_REGISTERED when the email never signed up. */
+  loginRequestOtp: (email: string, role?: UserRole) => Promise<import("./api/civictrace").OtpRequestResponse>;
+  /** Login step 2: verify OTP → signs in. Only works for existing accounts. */
+  loginVerifyOtp: (email: string, otp: string, role?: UserRole) => Promise<boolean>;
   logout: () => void;
   authError: string;
 }
@@ -111,24 +119,50 @@ export function CivicProvider({ children }: { children: ReactNode }) {
     );
   }, []);
 
-  const login = useCallback(async (name: string, contact: string, role?: string) => {
+  const persistSession = useCallback((token: string, user: BackendUser) => {
+    localStorage.setItem("civictrace_token", token);
+    localStorage.setItem("civictrace_user", JSON.stringify(user));
+    setToken(token);
+    setUser(user);
+    // Clear any complaint selected by a previous account so verification
+    // pages never show another citizen's record.
+    setSelectedId(null);
+    setSelectedCode(null);
+  }, []);
+
+  const signupRequestOtp = useCallback(async (name: string, email: string, role?: UserRole) => {
+    setAuthError("");
+    return api.signupRequestOtp(name, email, role);
+  }, []);
+
+  const signupVerifyOtp = useCallback(async (name: string, email: string, otp: string, role?: UserRole) => {
     setAuthError("");
     try {
-      const res = await api.login(name, contact, role);
-      localStorage.setItem("civictrace_token", res.token);
-      localStorage.setItem("civictrace_user", JSON.stringify(res.user));
-      setToken(res.token);
-      setUser(res.user);
-      // Clear any complaint selected by a previous account so verification
-      // pages never show another citizen's record.
-      setSelectedId(null);
-      setSelectedCode(null);
+      const res = await api.signupVerifyOtp(name, email, otp, role);
+      persistSession(res.token, res.user);
       return true;
     } catch (e) {
-      setAuthError(e instanceof Error ? e.message : "Login failed");
-      return false;
+      setAuthError(e instanceof Error ? e.message : "Verification failed");
+      throw e;
     }
+  }, [persistSession]);
+
+  const loginRequestOtp = useCallback(async (email: string, role?: UserRole) => {
+    setAuthError("");
+    return api.loginRequestOtp(email, role);
   }, []);
+
+  const loginVerifyOtp = useCallback(async (email: string, otp: string, role?: UserRole) => {
+    setAuthError("");
+    try {
+      const res = await api.loginVerifyOtp(email, otp, role);
+      persistSession(res.token, res.user);
+      return true;
+    } catch (e) {
+      setAuthError(e instanceof Error ? e.message : "Verification failed");
+      throw e;
+    }
+  }, [persistSession]);
 
   const logout = useCallback(() => {
     localStorage.removeItem("civictrace_token");
@@ -231,7 +265,7 @@ export function CivicProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<CivicState>(
     () => ({
-      user, token, login, logout, authError,
+      user, token, signupRequestOtp, signupVerifyOtp, loginRequestOtp, loginVerifyOtp, logout, authError,
       draft, setDraft, resetDraft,
       selectedId, selectedCode, select,
       expandProof, setExpandProof,
@@ -239,7 +273,7 @@ export function CivicProvider({ children }: { children: ReactNode }) {
       updateStatus, submitProof, disputeComplaint, acceptFix,
       actionError,
     }),
-    [user, token, login, logout, authError, draft, setDraft, resetDraft,
+    [user, token, signupRequestOtp, signupVerifyOtp, loginRequestOtp, loginVerifyOtp, logout, authError, draft, setDraft, resetDraft,
       selectedId, selectedCode, select, expandProof,
       lastResult, submitting, submitReport,
       updateStatus, submitProof, disputeComplaint, acceptFix, actionError]

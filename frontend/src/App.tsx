@@ -128,22 +128,92 @@ function CivicIllustration() {
   );
 }
 
-// ─── Auth Page ────────────────────────────────────────────────────────────────
+// ─── Auth Page (Login only — no signup toggle) ────────────────────────────────────
 function AuthPage({ onBack, onSuccess }: { onBack: () => void; onSuccess?: () => void }) {
-  const [mode, setMode] = useState<"login" | "signup">("login");
-  const [method, setMethod] = useState<"email" | "phone">("email");
   const [step, setStep] = useState<"credentials" | "otp">("credentials");
   const [email, setEmail] = useState("");
-  const [phone, setPhone] = useState("");
-  const [password, setPassword] = useState("");
   const [otp, setOtp] = useState(["", "", "", "", "", ""]);
-  const [showPass, setShowPass] = useState(false);
-  const [name, setName] = useState("");
   const [loading, setLoading] = useState(false);
-  const [sent, setSent] = useState(false);
   const [loginErr, setLoginErr] = useState("");
+  const [infoMsg, setInfoMsg] = useState("");
+  const [errCode, setErrCode] = useState("");
+  const [debugOtp, setDebugOtp] = useState("");
+  const [cooldown, setCooldown] = useState(0);
   const civic = useCivic();
   const otpRefs = useRef<(HTMLInputElement | null)[]>([]);
+
+  // Resend cooldown ticker.
+  useEffect(() => {
+    if (cooldown <= 0) return;
+    const t = setTimeout(() => setCooldown(c => c - 1), 1000);
+    return () => clearTimeout(t);
+  }, [cooldown]);
+
+  function isEmailValid(v: string) {
+    return /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/.test(v.trim());
+  }
+
+  function resetOtpStep() {
+    setStep("credentials");
+    setOtp(["", "", "", "", "", ""]);
+    setDebugOtp("");
+    setInfoMsg("");
+    setCooldown(0);
+  }
+
+  function errCodeOf(e: unknown) {
+    return (e as { code?: string })?.code ?? "";
+  }
+
+  async function handleSendCode(isResend = false) {
+    setLoginErr("");
+    setErrCode("");
+    setInfoMsg("");
+    setDebugOtp("");
+    const trimmed = email.trim();
+    if (!isEmailValid(trimmed)) {
+      setLoginErr("Please enter a valid email address (e.g. you@example.com).");
+      return;
+    }
+    setLoading(true);
+    try {
+      const res = isResend
+        ? await civic.loginRequestOtp(trimmed, "citizen")
+        : await civic.loginRequestOtp(trimmed, "citizen");
+      setStep("otp");
+      setOtp(["", "", "", "", "", ""]);
+      setCooldown(60);
+      setInfoMsg(res.message || `Verification code sent to ${trimmed}.`);
+      if (res.debugOtp) setDebugOtp(res.debugOtp);
+      setTimeout(() => otpRefs.current[0]?.focus(), 50);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Could not send code. Try again.";
+      setLoginErr(msg);
+      setErrCode(errCodeOf(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleVerify() {
+    setLoginErr("");
+    setErrCode("");
+    const code = otp.join("");
+    if (!/^\d{6}$/.test(code)) {
+      setLoginErr("Please enter the 6-digit code sent to your email.");
+      return;
+    }
+    setLoading(true);
+    try {
+      await civic.loginVerifyOtp(email.trim(), code, "citizen");
+      onSuccess?.();
+    } catch (e) {
+      setLoginErr(e instanceof Error ? e.message : "Verification failed. Try again.");
+      setErrCode(errCodeOf(e));
+    } finally {
+      setLoading(false);
+    }
+  }
 
   function handleOtpChange(val: string, i: number) {
     if (!/^\d*$/.test(val)) return;
@@ -157,29 +227,14 @@ function AuthPage({ onBack, onSuccess }: { onBack: () => void; onSuccess?: () =>
     if (e.key === "Backspace" && !otp[i] && i > 0) otpRefs.current[i - 1]?.focus();
   }
 
-  async function handleContinue() {
-    if (method === "phone" && step === "credentials") {
-      setLoading(true);
-      setTimeout(() => { setLoading(false); setStep("otp"); setSent(true); }, 900);
-      return;
-    }
-    setLoading(true);
-    setLoginErr("");
-    const contact = method === "email" ? email.trim() : phone.trim();
-    if (mode === "signup" && !name.trim()) {
-      setLoading(false);
-      setLoginErr("Please enter your full name to create an account.");
-      return;
-    }
-    // Signup sends the typed name (stored once); login sends contact as name
-    // which the backend ignores for existing users, preserving stored names.
-    const displayName = mode === "signup" ? name.trim() : contact || "Citizen";
-    // Best-effort backend login (demo auth, no OTP server-side). Always
-    // continue so the demo works even when the backend is unreachable.
-    const ok = await civic.login(displayName, contact || "guest@civictrace.local", "citizen").catch(() => false);
-    setLoading(false);
-    if (!ok) setLoginErr("Backend unreachable — continuing offline. Reports will not be saved.");
-    onSuccess?.();
+  function handleOtpPaste(e: React.ClipboardEvent) {
+    const text = e.clipboardData.getData("text").replace(/\D/g, "").slice(0, 6);
+    if (!text) return;
+    e.preventDefault();
+    const next = ["", "", "", "", "", ""];
+    for (let i = 0; i < text.length; i++) next[i] = text[i];
+    setOtp(next);
+    otpRefs.current[Math.min(text.length, 5)]?.focus();
   }
 
   const inputStyle: React.CSSProperties = {
@@ -300,105 +355,39 @@ function AuthPage({ onBack, onSuccess }: { onBack: () => void; onSuccess?: () =>
                 </div>
 
                 {/* Subheading */}
-                <p className="mb-6" style={{ fontFamily: "var(--font-body)", fontSize: "0.85rem", color: "#5C4A32", lineHeight: 1.6 }}>
+<p className="mb-6" style={{ fontFamily: "var(--font-body)", fontSize: "0.85rem", color: "#5C4A32", lineHeight: 1.6 }}>
                   Report civic issues. Track what happens next. Verify the outcome.
                 </p>
 
-                {/* Mode toggle */}
-                <div className="flex border mb-6" style={{ borderColor: "#C8B89A", borderRadius: "1px" }}>
-                  {(["login", "signup"] as const).map(m => (
-                    <button key={m} onClick={() => { setMode(m); setStep("credentials"); setOtp(["","","","","",""]); }}
-                      className="flex-1 py-2 transition-colors"
-                      style={{
-                        fontFamily: "var(--font-mono)", fontSize: "0.65rem", letterSpacing: "0.1em", textTransform: "uppercase",
-                        background: mode === m ? "#1C0A00" : "transparent",
-                        color: mode === m ? "#F5F0E8" : "#5C4A32",
-                        borderRadius: "0px",
-                      }}>
-                      {m === "login" ? "Sign In" : "Create Account"}
-                    </button>
-                  ))}
-                </div>
-
-                {/* Method selector */}
-                <div className="flex gap-2 mb-5">
-                  {(["email", "phone"] as const).map(m => (
-                    <button key={m} onClick={() => { setMethod(m); setStep("credentials"); setOtp(["","","","","",""]); setSent(false); }}
-                      className="flex items-center gap-1.5 px-3 py-1.5 border transition-colors"
-                      style={{
-                        fontFamily: "var(--font-mono)", fontSize: "0.6rem", letterSpacing: "0.1em", textTransform: "uppercase",
-                        borderColor: method === m ? "#1C0A00" : "#C8B89A",
-                        background: method === m ? "#F5F0E8" : "transparent",
-                        color: method === m ? "#1C0A00" : "#5C4A32",
-                        borderRadius: "1px",
-                      }}>
-                      {m === "email" ? (
-                        <svg width="11" height="11" viewBox="0 0 11 11" fill="none">
-                          <rect x="1" y="2.5" width="9" height="6" rx="1" stroke="currentColor" strokeWidth="1"/>
-                          <path d="M1 3.5 L5.5 6.5 L10 3.5" stroke="currentColor" strokeWidth="1"/>
-                        </svg>
-                      ) : (
-                        <svg width="10" height="11" viewBox="0 0 10 11" fill="none">
-                          <rect x="1.5" y="1" width="7" height="9" rx="1.5" stroke="currentColor" strokeWidth="1"/>
-                          <circle cx="5" cy="8.5" r="0.75" fill="currentColor"/>
-                        </svg>
-                      )}
-                      {m === "email" ? "Email" : "Phone"}
-                    </button>
-                  ))}
+                {/* Email-only auth: OTP goes to a real inbox, so random/
+                    fake addresses can never get in. */}
+                <div className="flex items-center gap-1.5 px-3 py-1.5 border mb-5"
+                  style={{
+                    fontFamily: "var(--font-mono)", fontSize: "0.6rem", letterSpacing: "0.1em", textTransform: "uppercase",
+                    borderColor: "#1C0A00",
+                    background: "#F5F0E8",
+                    color: "#1C0A00",
+                    borderRadius: "1px",
+                  }}>
+                  <svg width="11" height="11" viewBox="0 0 11 11" fill="none">
+                    <rect x="1" y="2.5" width="9" height="6" rx="1" stroke="currentColor" strokeWidth="1"/>
+                    <path d="M1 3.5 L5.5 6.5 L10 3.5" stroke="currentColor" strokeWidth="1"/>
+                  </svg>
+                  Email + OTP verification
                 </div>
 
                 {/* Fields */}
                 <div className="space-y-4">
-                  {mode === "signup" && (
-                    <div>
-                      <label style={labelStyle}>Full Name</label>
-                      <input style={inputStyle} placeholder="Your name" value={name} onChange={e => setName(e.target.value)}/>
-                    </div>
-                  )}
-
                   {step === "credentials" && (
-                    <>
-                      <div>
-                        <label style={labelStyle}>{method === "email" ? "Email Address" : "Phone Number"}</label>
-                        {method === "email" ? (
-                          <input type="email" style={inputStyle} placeholder="you@example.com"
-                            value={email} onChange={e => setEmail(e.target.value)}/>
-                        ) : (
-                          <div className="flex gap-2">
-                            <div className="flex items-center px-3 border" style={{ borderColor: "#C8B89A", background: "#F0E8D8", borderRadius: "1px", fontFamily: "var(--font-mono)", fontSize: "0.8rem", color: "#5C4A32" }}>
-                              +91
-                            </div>
-                            <input type="tel" style={{ ...inputStyle, flex: 1 }} placeholder="98765 43210"
-                              value={phone} onChange={e => setPhone(e.target.value)}/>
-                          </div>
-                        )}
+                    <div>
+                      <label style={labelStyle}>Email Address</label>
+                      <input type="email" style={inputStyle} placeholder="you@example.com"
+                        value={email} onChange={e => { setEmail(e.target.value); if (loginErr) { setLoginErr(""); setErrCode(""); } }}
+                        onKeyDown={e => { if (e.key === "Enter") handleSendCode(); }} />
+                      <div style={{ fontFamily: "var(--font-body)", fontSize: "0.75rem", color: "#5C4A32", marginTop: "6px", opacity: 0.7 }}>
+                        We'll send a 6-digit login code to your registered email.
                       </div>
-
-                      {method === "email" && (
-                        <div>
-                          <label style={labelStyle}>Password</label>
-                          <div className="relative">
-                            <input type={showPass ? "text" : "password"} style={{ ...inputStyle, paddingRight: "40px" }}
-                              placeholder="••••••••" value={password} onChange={e => setPassword(e.target.value)}/>
-                            <button onClick={() => setShowPass(!showPass)} className="absolute right-3 top-1/2 -translate-y-1/2 opacity-40 hover:opacity-70 transition-opacity">
-                              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                                {showPass
-                                  ? <><path d="M1 8 C3 4 13 4 15 8 C13 12 3 12 1 8" stroke="#1C0A00" strokeWidth="1.2"/><circle cx="8" cy="8" r="2" stroke="#1C0A00" strokeWidth="1.2"/></>
-                                  : <><path d="M1 8 C3 4 13 4 15 8 C13 12 3 12 1 8" stroke="#1C0A00" strokeWidth="1.2"/><circle cx="8" cy="8" r="2" stroke="#1C0A00" strokeWidth="1.2"/><path d="M2 2 L14 14" stroke="#1C0A00" strokeWidth="1.2"/></>
-                                }
-                              </svg>
-                            </button>
-                          </div>
-                          {mode === "login" && (
-                            <button className="mt-1.5 opacity-50 hover:opacity-80 transition-opacity"
-                              style={{ fontFamily: "var(--font-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", color: "#3A6B9B", display: "block", marginLeft: "auto" }}>
-                              Forgot password?
-                            </button>
-                          )}
-                        </div>
-                      )}
-                    </>
+                    </div>
                   )}
 
                   {/* OTP Step */}
@@ -406,16 +395,20 @@ function AuthPage({ onBack, onSuccess }: { onBack: () => void; onSuccess?: () =>
                     <div>
                       <label style={labelStyle}>Verification Code</label>
                       <div style={{ fontFamily: "var(--font-body)", fontSize: "0.8rem", color: "#5C4A32", marginBottom: "12px", opacity: 0.7 }}>
-                        We sent a 6-digit code to {phone || "your phone"}
+                        We sent a 6-digit code to {email.trim() || "your email"}
+                        <button onClick={resetOtpStep} className="ml-1 hover:opacity-80 transition-opacity"
+                          style={{ fontFamily: "var(--font-mono)", fontSize: "0.65rem", color: "#3A6B9B" }}>
+                          (change)
+                        </button>
                       </div>
-                      <div className="flex gap-2">
+                      <div className="flex gap-2" onPaste={handleOtpPaste}>
                         {otp.map((digit, i) => (
                           <input key={i}
                             ref={el => { otpRefs.current[i] = el; }}
                             type="text" inputMode="numeric" maxLength={1}
                             value={digit}
                             onChange={e => handleOtpChange(e.target.value, i)}
-                            onKeyDown={e => handleOtpKey(e, i)}
+                            onKeyDown={e => { handleOtpKey(e, i); if (e.key === "Enter") handleVerify(); }}
                             style={{
                               width: "100%", maxWidth: 52, height: 52, textAlign: "center",
                               border: "1px solid #C8B89A", borderRadius: "1px", background: "#FAF7F2",
@@ -425,16 +418,37 @@ function AuthPage({ onBack, onSuccess }: { onBack: () => void; onSuccess?: () =>
                           />
                         ))}
                       </div>
-                      <button className="mt-2 opacity-50 hover:opacity-80 transition-opacity"
-                        style={{ fontFamily: "var(--font-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", color: "#3A6B9B" }}>
-                        Resend code
+                      <button onClick={() => handleSendCode(true)} disabled={cooldown > 0 || loading}
+                        className="mt-2 transition-opacity"
+                        style={{
+                          fontFamily: "var(--font-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", color: "#3A6B9B",
+                          opacity: cooldown > 0 || loading ? 0.4 : 0.8,
+                        }}>
+                        {cooldown > 0 ? `Resend code in ${cooldown}s` : "Resend code"}
                       </button>
+                      {debugOtp && (
+                        <div className="mt-3 p-3 border" style={{ borderColor: "#B8872A", background: "#FBF6EB", borderRadius: "1px" }}>
+                          <div style={{ fontFamily: "var(--font-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", color: "#5C4A32" }}>
+                            DEV MODE — email delivery is off. Your code is:
+                          </div>
+                          <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: "1.4rem", color: "#1C0A00", letterSpacing: "0.3em" }}>
+                            {debugOtp}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
 
-                {/* Continue button */}
-                <button onClick={handleContinue} disabled={loading}
+                {/* Info message */}
+                {infoMsg && step === "otp" && !loginErr && (
+                  <div className="mt-3 text-center" style={{ fontFamily: "var(--font-mono)", fontSize: "0.62rem", color: "#4A7C5F" }}>
+                    {infoMsg}
+                  </div>
+                )}
+
+                {/* Continue / Verify button */}
+                <button onClick={() => (step === "otp" ? handleVerify() : handleSendCode())} disabled={loading}
                   className="w-full mt-6 py-3 flex items-center justify-center gap-2 transition-opacity"
                   style={{
                     background: "#1C0A00", color: "#F5F0E8", borderRadius: "1px",
@@ -448,13 +462,21 @@ function AuthPage({ onBack, onSuccess }: { onBack: () => void; onSuccess?: () =>
                   ) : (
                     <>
                       <span className="w-1.5 h-1.5 rounded-full" style={{ background: "#9B3A3A" }}/>
-                      {step === "otp" ? "Verify & Continue" : mode === "login" ? "Continue" : "Create Account"}
+                      {step === "otp" ? "Verify & Continue" : "Send Login Code"}
                     </>
                   )}
                 </button>
                 {loginErr && (
                   <div className="mt-3 text-center" style={{ fontFamily: "var(--font-mono)", fontSize: "0.62rem", color: "#9B3A3A" }}>
                     {loginErr}
+                    {errCode === "NOT_REGISTERED" && (
+                      <div className="mt-1.5">
+                        <span style={{ color: "#5C4A32" }}>Don't have an account? </span>
+                        <button onClick={() => onBack()} className="underline hover:opacity-80" style={{ color: "#3A6B9B" }}>
+                          Go back & Create Account
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -466,7 +488,7 @@ function AuthPage({ onBack, onSuccess }: { onBack: () => void; onSuccess?: () =>
                 </div>
 
                 {/* Toggle mode */}
-                <button onClick={() => { setMode(mode === "login" ? "signup" : "login"); setStep("credentials"); setOtp(["","","","","",""]); }}
+                <button onClick={() => switchMode(mode === "login" ? "signup" : "login")}
                   className="w-full py-2.5 border transition-colors hover:bg-[#EDE5D4]"
                   style={{
                     borderColor: "#C8B89A", color: "#1C0A00", borderRadius: "1px",
@@ -537,38 +559,44 @@ function CivicMap({ compact = false }: { compact?: boolean }) {
   ];
 
   return (
-    <svg width="100%" viewBox={`0 0 560 ${h}`} xmlns="http://www.w3.org/2000/svg" className="w-full" style={{ maxHeight: h }}>
+    <svg width="100%" viewBox={`0 0 560 ${h}`} xmlns="http://www.w3.org/2000/svg" className="w-full" style={{ maxHeight: h, borderRadius: 8, boxShadow: "0 1px 2px rgba(60,64,67,0.3), 0 2px 6px 2px rgba(60,64,67,0.15)" }}>
       {/* Background */}
-      <rect width="560" height={h} fill="#EDE5D4" rx="2"/>
+      <rect width="560" height={h} fill="#E9E5DC" rx="8"/>
 
       {/* City blocks - irregular grid */}
-      <rect x="60" y="40" width="120" height="80" rx="1" fill="#D6C9B0" stroke="#C8B89A" strokeWidth="0.75"/>
-      <rect x="190" y="40" width="90" height="60" rx="1" fill="#CBBC9F" stroke="#C8B89A" strokeWidth="0.75"/>
-      <rect x="290" y="40" width="110" height="50" rx="1" fill="#D0C5A8" stroke="#C8B89A" strokeWidth="0.75"/>
-      <rect x="410" y="40" width="100" height="70" rx="1" fill="#C9BDA2" stroke="#C8B89A" strokeWidth="0.75"/>
-      <rect x="60" y="130" width="80" height="100" rx="1" fill="#CBBC9F" stroke="#C8B89A" strokeWidth="0.75"/>
-      <rect x="150" y="130" width="100" height="70" rx="1" fill="#D6C9B0" stroke="#C8B89A" strokeWidth="0.75"/>
-      <rect x="260" y="100" width="130" height="85" rx="1" fill="#C5BAA0" stroke="#C8B89A" strokeWidth="0.75"/>
-      <rect x="400" y="120" width="110" height="90" rx="1" fill="#D0C5A8" stroke="#C8B89A" strokeWidth="0.75"/>
-      <rect x="60" y="240" width="150" height="70" rx="1" fill="#CBBC9F" stroke="#C8B89A" strokeWidth="0.75"/>
-      <rect x="220" y="220" width="120" height="80" rx="1" fill="#D6C9B0" stroke="#C8B89A" strokeWidth="0.75"/>
-      <rect x="350" y="220" width="160" height="90" rx="1" fill="#C9BDA2" stroke="#C8B89A" strokeWidth="0.75"/>
+      <rect x="60" y="40" width="120" height="80" rx="1" fill="#DFDAD0" stroke="#D9D9D9" strokeWidth="0.75"/>
+      <rect x="190" y="40" width="90" height="60" rx="1" fill="#D2CDC0" stroke="#D9D9D9" strokeWidth="0.75"/>
+      <rect x="290" y="40" width="110" height="50" rx="1" fill="#DFDAD0" stroke="#D9D9D9" strokeWidth="0.75"/>
+      <rect x="410" y="40" width="100" height="70" rx="1" fill="#D2CDC0" stroke="#D9D9D9" strokeWidth="0.75"/>
+      <rect x="60" y="130" width="80" height="100" rx="1" fill="#D2CDC0" stroke="#D9D9D9" strokeWidth="0.75"/>
+      <rect x="150" y="130" width="100" height="70" rx="1" fill="#DFDAD0" stroke="#D9D9D9" strokeWidth="0.75"/>
+      <rect x="260" y="100" width="130" height="85" rx="1" fill="#D2CDC0" stroke="#D9D9D9" strokeWidth="0.75"/>
+      <rect x="400" y="120" width="110" height="90" rx="1" fill="#DFDAD0" stroke="#D9D9D9" strokeWidth="0.75"/>
+      <rect x="60" y="240" width="150" height="70" rx="1" fill="#D2CDC0" stroke="#D9D9D9" strokeWidth="0.75"/>
+      <rect x="220" y="220" width="120" height="80" rx="1" fill="#DFDAD0" stroke="#D9D9D9" strokeWidth="0.75"/>
+      <rect x="350" y="220" width="160" height="90" rx="1" fill="#D2CDC0" stroke="#D9D9D9" strokeWidth="0.75"/>
 
       {/* Park / green area */}
-      <ellipse cx="160" cy="220" rx="40" ry="25" fill="#B8C9A3" opacity="0.6"/>
-      <ellipse cx="470" cy="90" rx="35" ry="20" fill="#B8C9A3" opacity="0.5"/>
+      <ellipse cx="160" cy="220" rx="40" ry="25" fill="#C6EDC2" opacity="0.9"/>
+      <ellipse cx="470" cy="90" rx="35" ry="20" fill="#C6EDC2" opacity="0.9"/>
 
       {/* Roads */}
-      <line x1="0" y1="120" x2="560" y2="120" stroke="#F5F0E8" strokeWidth="8"/>
-      <line x1="0" y1="215" x2="560" y2="215" stroke="#F5F0E8" strokeWidth="6"/>
-      <line x1="230" y1="0" x2="230" y2={h} stroke="#F5F0E8" strokeWidth="8"/>
-      <line x1="400" y1="0" x2="400" y2={h} stroke="#F5F0E8" strokeWidth="6"/>
-      <line x1="100" y1="0" x2="100" y2={h} stroke="#F5F0E8" strokeWidth="5"/>
-      <line x1="0" y1="310" x2="560" y2="310" stroke="#F5F0E8" strokeWidth="5"/>
+      <line x1="0" y1="120" x2="560" y2="120" stroke="#D9D9D9" strokeWidth="10"/>
+      <line x1="0" y1="215" x2="560" y2="215" stroke="#D9D9D9" strokeWidth="8"/>
+      <line x1="230" y1="0" x2="230" y2={h} stroke="#D9D9D9" strokeWidth="10"/>
+      <line x1="400" y1="0" x2="400" y2={h} stroke="#D9D9D9" strokeWidth="8"/>
+      <line x1="100" y1="0" x2="100" y2={h} stroke="#D9D9D9" strokeWidth="7"/>
+      <line x1="0" y1="310" x2="560" y2="310" stroke="#D9D9D9" strokeWidth="7"/>
+      <line x1="0" y1="120" x2="560" y2="120" stroke="#FFFFFF" strokeWidth="8"/>
+      <line x1="0" y1="215" x2="560" y2="215" stroke="#FFFFFF" strokeWidth="6"/>
+      <line x1="230" y1="0" x2="230" y2={h} stroke="#FFFFFF" strokeWidth="8"/>
+      <line x1="400" y1="0" x2="400" y2={h} stroke="#FFFFFF" strokeWidth="6"/>
+      <line x1="100" y1="0" x2="100" y2={h} stroke="#FFFFFF" strokeWidth="5"/>
+      <line x1="0" y1="310" x2="560" y2="310" stroke="#FFFFFF" strokeWidth="5"/>
 
       {/* Road center lines */}
-      <line x1="0" y1="120" x2="560" y2="120" stroke="#D6C9B0" strokeWidth="1" strokeDasharray="12,8"/>
-      <line x1="230" y1="0" x2="230" y2={h} stroke="#D6C9B0" strokeWidth="1" strokeDasharray="12,8"/>
+      <line x1="0" y1="120" x2="560" y2="120" stroke="#BDC1C6" strokeWidth="1" strokeDasharray="12,8"/>
+      <line x1="230" y1="0" x2="230" y2={h} stroke="#BDC1C6" strokeWidth="1" strokeDasharray="12,8"/>
 
       {/* Complaint lifecycle connector */}
       <path d="M 180 95 Q 230 115 245 200" stroke="#9B3A3A" strokeWidth="1.5" fill="none" strokeDasharray="4,3" opacity="0.7"/>
@@ -588,14 +616,14 @@ function CivicMap({ compact = false }: { compact?: boolean }) {
       <rect width="560" height={h} fill="url(#wash)" opacity="0.12"/>
       <defs>
         <linearGradient id="wash" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%" stopColor="#C8A96E"/>
-          <stop offset="100%" stopColor="#8BA88B"/>
+          <stop offset="0%" stopColor="#AAD3DF"/>
+          <stop offset="100%" stopColor="#C6EDC2"/>
         </linearGradient>
       </defs>
 
       {/* Frame border */}
-      <rect x="1" y="1" width="558" height={h - 2} rx="2" fill="none" stroke="#C8B89A" strokeWidth="1.5"/>
-      <rect x="4" y="4" width="552" height={h - 8} rx="1" fill="none" stroke="#C8B89A" strokeWidth="0.5" strokeDasharray="6,4"/>
+      <rect x="1" y="1" width="558" height={h - 2} rx="8" fill="none" stroke="#DADCE0" strokeWidth="1.5"/>
+      <rect x="4" y="4" width="552" height={h - 8} rx="6" fill="none" stroke="#DADCE0" strokeWidth="0.5" strokeDasharray="6,4"/>
     </svg>
   );
 }
@@ -5372,6 +5400,110 @@ function PublicCivicMapPage({ onNavigate }: { onNavigate: (p: Page) => void }) {
     "Resolved": true, "Disputed": true, "Escalated": true,
   });
 
+  // ── Google-Maps-like viewport: zoom levels + drag-to-pan + Map/Satellite ──
+  const MAP_W = 900, MAP_H = 580;
+  const ZOOMS = [1, 1.5, 2.25, 3.25];
+  const [zoomIdx, setZoomIdx] = useState(0);
+  const [satView, setSatView] = useState(false);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const zoom = ZOOMS[zoomIdx];
+  const dragRef = useRef<{ sx: number; sy: number; px: number; py: number; moved: boolean } | null>(null);
+  const suppressClickRef = useRef(false);
+  const svgWrapRef = useRef<HTMLDivElement | null>(null);
+
+  // Google Maps palette (standard) + satellite palette.
+  const P = satView ? {
+    land: "#42563F", block: "#4A6046", building: "#556B52",
+    water: "#1D4E6B", park: "#2E6B39", tree: "#1E4D28",
+    roadCase: "#5F6358", road: "#CFC9B8",
+    highwayCase: "#9A6B22", highway: "#E8A33D",
+    label: "#FFFFFF", sublabel: "#D7E0D2", halo: "rgba(0,0,0,0.55)",
+    poiBg: "#FFFFFF", shieldBg: "#FFFFFF", shieldText: "#3C4043",
+  } : {
+    land: "#E9E5DC", block: "#E0DBCE", building: "#D2CDC0",
+    water: "#AAD3DF", park: "#C6EDC2", tree: "#6DBE6D",
+    roadCase: "#D9D9D9", road: "#FFFFFF",
+    highwayCase: "#E8A33D", highway: "#FBCD79",
+    label: "#5B5B5B", sublabel: "#9AA0A6", halo: "#FFFFFF",
+    poiBg: "#FFFFFF", shieldBg: "#FFFFFF", shieldText: "#3C4043",
+  };
+
+  const clampPan = (x: number, y: number, z: number) => {
+    const vw = MAP_W / z, vh = MAP_H / z;
+    return {
+      x: Math.min(Math.max(x, 0), Math.max(MAP_W - vw, 0)),
+      y: Math.min(Math.max(y, 0), Math.max(MAP_H - vh, 0)),
+    };
+  };
+
+  function zoomTo(idx: number) {
+    const ni = Math.min(Math.max(idx, 0), ZOOMS.length - 1);
+    const nz = ZOOMS[ni];
+    const vw = MAP_W / zoom, vh = MAP_H / zoom;
+    const cx = pan.x + vw / 2, cy = pan.y + vh / 2;
+    const nvw = MAP_W / nz, nvh = MAP_H / nz;
+    setPan(clampPan(cx - nvw / 2, cy - nvh / 2, nz));
+    setZoomIdx(ni);
+  }
+
+  function recenter() { setZoomIdx(0); setPan({ x: 0, y: 0 }); }
+
+  function onMapPointerDown(e: React.PointerEvent) {
+    if (e.button !== 0) return;
+    (e.target as Element).setPointerCapture?.(e.pointerId);
+    dragRef.current = { sx: e.clientX, sy: e.clientY, px: pan.x, py: pan.y, moved: false };
+  }
+  function onMapPointerMove(e: React.PointerEvent) {
+    const d = dragRef.current;
+    if (!d) return;
+    const el = svgWrapRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const scaleX = (MAP_W / zoom) / rect.width;
+    const scaleY = (MAP_H / zoom) / rect.height;
+    const dx = (e.clientX - d.sx) * scaleX, dy = (e.clientY - d.sy) * scaleY;
+    if (Math.abs(e.clientX - d.sx) + Math.abs(e.clientY - d.sy) > 4) d.moved = true;
+    setPan(clampPan(d.px - dx, d.py - dy, zoom));
+  }
+  function onMapPointerUp() {
+    if (dragRef.current?.moved) {
+      suppressClickRef.current = true;
+      setTimeout(() => { suppressClickRef.current = false; }, 0);
+    }
+    dragRef.current = null;
+  }
+
+  const vbW = MAP_W / zoom, vbH = MAP_H / zoom;
+  const viewBox = `${pan.x} ${pan.y} ${vbW} ${vbH}`;
+  const k = 1 / zoom; // counter-scale so pins & labels stay constant size
+  const fix = (ax: number, ay: number) => `translate(${ax} ${ay}) scale(${k}) translate(${-ax} ${-ay})`;
+  const scaleLabel = vbW > 700 ? "500 m" : vbW > 400 ? "200 m" : "100 m";
+
+  // Tree dots inside parks (deterministic pseudo-jitter).
+  const treeDots: [number, number][] = [];
+  [[205, 305, 120, 80], [585, 425, 100, 70], [55, 105, 90, 60]].forEach(([x, y, w, h]) => {
+    for (let ix = x + 8; ix < x + w - 4; ix += 14)
+      for (let iy = y + 8; iy < y + h - 4; iy += 14)
+        treeDots.push([ix + ((iy * 7) % 5), iy]);
+  });
+
+  // Building footprints (Google-style city blocks).
+  const buildings: [number, number, number, number][] = [
+    [16,16,34,26],[56,16,28,26],[90,16,40,26],[16,50,50,30],[72,50,58,30],[16,88,34,40],[56,88,40,40],[102,88,28,40],
+    [190,16,50,26],[246,16,44,26],[296,16,60,26],[190,50,70,34],[266,50,90,34],[190,92,56,40],[252,92,60,40],[318,92,38,40],
+    [420,16,60,26],[486,16,56,26],[548,16,70,26],[420,50,80,34],[506,50,112,34],[420,92,56,40],[482,92,64,40],[552,92,66,40],
+    [760,100,60,40],[830,100,60,40],[760,150,130,44],
+    [16,195,44,40],[66,195,60,40],[16,242,60,44],[82,242,44,44],[16,292,50,44],[72,292,54,44],
+    [190,195,60,40],[256,195,50,40],[312,195,44,40],[190,242,44,40],[240,242,60,40],[306,242,40,40],
+    [420,195,80,40],[506,195,112,40],[420,242,60,44],[486,242,70,44],[562,242,56,44],[420,292,90,44],[516,292,102,44],
+    [745,195,60,40],[811,195,60,40],[745,242,70,44],[821,242,50,44],[745,292,50,44],[801,292,70,44],
+    [16,390,50,40],[72,390,54,40],[16,438,60,44],[82,438,44,44],
+    [190,390,70,40],[266,390,90,40],[190,438,60,44],[256,438,100,44],
+    [420,390,80,40],[506,390,112,40],[420,438,90,44],[516,438,102,44],
+    [745,390,55,24],[806,390,60,24],
+    [190,455,70,34],[266,455,90,34],[420,455,100,34],
+  ];
+
   const categories = ["All", "Roads & Infrastructure", "Water & Drainage", "Sanitation", "Public Safety", "Parks & Public Spaces", "Environment"];
   const statuses    = ["All", "Reported", "Assessed", "Assigned", "In Progress", "Proof Submitted", "Resolved", "Disputed", "Unresolved", "Escalated"];
   const priorities  = ["All", "Normal", "Urgent", "Very Urgent"];
@@ -5645,13 +5777,13 @@ function PublicCivicMapPage({ onNavigate }: { onNavigate: (p: Page) => void }) {
           {/* ── RIGHT: MAP ── */}
           <div>
             {/* Map container */}
-            <div className="border relative" style={{ borderColor: "#C8B89A", borderRadius: "2px", background: "#E8E0CE", overflow: "hidden" }}>
+            <div className="border relative" style={{ borderColor: satView ? "#5F6368" : "#DADCE0", borderRadius: "8px", background: P.land, overflow: "hidden", boxShadow: "0 1px 2px rgba(60,64,67,0.3), 0 2px 6px 2px rgba(60,64,67,0.15)" }}>
 
               {/* Map header bar */}
               <div className="absolute top-0 left-0 right-0 z-20 px-4 py-2 flex items-center justify-between border-b"
-                style={{ background: "rgba(245,240,232,0.95)", borderColor: "#C8B89A", backdropFilter: "blur(4px)" }}>
-                <div style={{ fontFamily: "var(--font-mono)", fontSize: "0.54rem", letterSpacing: "0.12em", textTransform: "uppercase", color: "#5C4A32", opacity: 0.5 }}>
-                  Civic Atlas · {filteredIssues.length} issues visible
+                style={{ background: "rgba(255,255,255,0.95)", borderColor: "#DADCE0", backdropFilter: "blur(4px)" }}>
+                <div style={{ fontFamily: "var(--font-body)", fontSize: "0.72rem", color: "#3C4043" }}>
+                  Civic Atlas · <span style={{ fontWeight: 700 }}>{filteredIssues.length}</span> issues visible
                 </div>
                 <div className="flex items-center gap-4 flex-wrap">
                   {legendItems.map(({ label, color }) => {
@@ -5663,98 +5795,148 @@ function PublicCivicMapPage({ onNavigate }: { onNavigate: (p: Page) => void }) {
                         title={on ? `Hide ${label}` : `Show ${label}`}
                         style={{ opacity: on ? 1 : 0.35 }}>
                         <div className="w-2 h-2 rounded-full" style={{ background: color }}/>
-                        <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.5rem", color: "#5C4A32", textDecoration: on ? "none" : "line-through" }}>{label}</span>
+                        <span style={{ fontFamily: "var(--font-body)", fontSize: "0.62rem", color: "#5F6368", textDecoration: on ? "none" : "line-through" }}>{label}</span>
                       </button>
                     );
                   })}
                 </div>
               </div>
 
-              {/* SVG illustrated map */}
-              <div style={{ paddingTop: 38 }}>
+              {/* Google-style base map */}
+              <div ref={svgWrapRef} style={{ paddingTop: 38, cursor: dragRef ? "grab" : "default", userSelect: "none" }}>
                 <svg
-                  viewBox="0 0 900 580"
-                  style={{ display: "block", width: "100%", height: "auto", minHeight: 460 }}
-                  onClick={() => setSelected(null)}>
+                  viewBox={viewBox}
+                  style={{ display: "block", width: "100%", height: "auto", minHeight: 460, touchAction: "none" }}
+                  onPointerDown={onMapPointerDown}
+                  onPointerMove={onMapPointerMove}
+                  onPointerUp={onMapPointerUp}
+                  onPointerLeave={onMapPointerUp}
+                  onClick={() => { if (!suppressClickRef.current) setSelected(null); }}>
 
-                  {/* Map background */}
-                  <rect width="900" height="580" fill="#E8E0CE"/>
+                  {/* Land base */}
+                  <rect x="-200" y="-200" width="1300" height="980" fill={P.land}/>
 
-                  {/* Paper grain-like subtle lines */}
-                  {[50, 110, 170, 230, 290, 350, 410, 470, 530].map(y =>
-                    <line key={y} x1="0" y1={y} x2="900" y2={y} stroke="#D4C9B0" strokeWidth="0.4" opacity="0.5"/>
-                  )}
-                  {[80, 180, 280, 380, 480, 580, 680, 780, 880].map(x =>
-                    <line key={x} x1={x} y1="0" x2={x} y2="580" stroke="#D4C9B0" strokeWidth="0.4" opacity="0.5"/>
-                  )}
+                  {/* Water: Civic Lake + Civic River */}
+                  <path d="M700 -20 C 690 80 730 140 710 220 C 695 280 720 340 705 420 C 698 470 700 500 702 525"
+                    stroke={P.water} strokeWidth="16" fill="none" strokeLinecap="round"/>
+                  <path d="M-20 522 Q110 492 230 512 Q350 532 430 512 Q510 492 630 522 L630 600 L-20 600 Z" fill={P.water}/>
+                  <text x="170" y="562" textAnchor="middle" fill={satView ? "#D7E8F0" : "#5C7A8A"} fontSize="10" fontFamily="var(--font-body)" opacity="0.85" letterSpacing="3"
+                    transform={fix(170, 562)}>CIVIC LAKE</text>
+                  <text fill={satView ? "#D7E8F0" : "#5C7A8A"} fontSize="9" fontFamily="var(--font-body)" opacity="0.8" letterSpacing="2"
+                    transform={`${fix(722, 300)} rotate(78 722 300)`}>CIVIC RIVER</text>
 
-                  {/* ── City blocks — coloured background patches ── */}
                   {/* Parks */}
-                  <rect x="200" y="300" width="130" height="90" fill="#D4DEAD" opacity="0.6" rx="1"/>
-                  <rect x="580" y="420" width="110" height="80" fill="#D4DEAD" opacity="0.6" rx="1"/>
-                  <rect x="50" y="100" width="100" height="70" fill="#D4DEAD" opacity="0.55" rx="1"/>
-                  {/* Water body */}
-                  <path d="M0 520 Q100 490 220 510 Q340 530 420 510 Q500 490 600 520 L600 580 L0 580 Z" fill="#BFCEDA" opacity="0.55"/>
-                  <text x="150" y="565" textAnchor="middle" fill="#5C7A8A" fontSize="9" fontFamily="var(--font-mono)" opacity="0.6" letterSpacing="2">CIVIC LAKE</text>
-                  {/* Industrial zone */}
-                  <rect x="750" y="80" width="150" height="140" fill="#C8C0AA" opacity="0.5"/>
-
-                  {/* ── Major roads ── */}
-                  {/* Horizontals */}
-                  <rect x="0" y="156" width="900" height="22" fill="#D4C9B0"/>
-                  <rect x="0" y="350" width="900" height="22" fill="#D4C9B0"/>
-                  <rect x="0" y="490" width="900" height="16" fill="#D4C9B0"/>
-                  {/* Verticals */}
-                  <rect x="148" y="0" width="20" height="580" fill="#D4C9B0"/>
-                  <rect x="380" y="0" width="22" height="580" fill="#D4C9B0"/>
-                  <rect x="640" y="0" width="18" height="580" fill="#D4C9B0"/>
-                  <rect x="820" y="0" width="14" height="580" fill="#D4C9B0"/>
-                  {/* Diagonal road */}
-                  <path d="M0 240 L200 156" stroke="#D4C9B0" strokeWidth="14" fill="none"/>
-                  <path d="M640 350 L900 460" stroke="#D4C9B0" strokeWidth="12" fill="none"/>
-
-                  {/* Road centrelines */}
-                  {[167, 361, 499].map(y =>
-                    <line key={y} x1="0" y1={y} x2="900" y2={y} stroke="#C8B89A" strokeWidth="0.8" strokeDasharray="14 10"/>
-                  )}
-                  {[158, 391, 649].map(x =>
-                    <line key={x} x1={x} y1="0" x2={x} y2="580" stroke="#C8B89A" strokeWidth="0.8" strokeDasharray="14 10"/>
-                  )}
-
-                  {/* ── Secondary roads ── */}
-                  {[260, 430].map(y =>
-                    <line key={`h${y}`} x1="0" y1={y} x2="900" y2={y} stroke="#D4C9B0" strokeWidth="9"/>
-                  )}
-                  {[280, 520, 720].map(x =>
-                    <line key={`v${x}`} x1={x} y1="0" x2={x} y2="580" stroke="#D4C9B0" strokeWidth="9"/>
-                  )}
-
-                  {/* ── City blocks (buildings) ── */}
-                  {[
-                    [20,20,120,125], [180,20,185,125], [420,20,200,125], [670,20,135,125],
-                    [20,195,110,50], [180,195,185,50], [420,195,200,50], [670,195,135,50],
-                    [20,265,110,70], [340,265,30,70], [420,265,200,70], [670,265,135,70],
-                    [20,390,110,90], [180,390,185,90], [420,390,200,90], [670,390,135,90],
-                    [20,495,110,75], [420,495,200,75], [670,495,145,75],
-                  ].map(([x, y, w, h], i) => (
-                    <rect key={i} x={x} y={y} width={w} height={h} fill="#D9D1BE" stroke="#C8B89A" strokeWidth="0.5"/>
+                  {[[200, 300, 130, 90], [580, 420, 110, 80], [50, 100, 100, 70]].map(([x, y, w, h], i) => (
+                    <rect key={i} x={x} y={y} width={w} height={h} fill={P.park} rx="8"/>
                   ))}
-
-                  {/* Zone labels */}
+                  {treeDots.map(([x, y], i) => (
+                    <circle key={i} cx={x} cy={y} r="2.6" fill={P.tree} opacity="0.8"/>
+                  ))}
                   {[
-                    { x: 75, y: 82, t: "SECTOR A" }, { x: 270, y: 82, t: "SECTOR B" },
-                    { x: 515, y: 82, t: "SECTOR X" },{ x: 736, y: 82, t: "SECTOR H" },
-                    { x: 75, y: 320, t: "SECTOR D" },{ x: 515, y: 420, t: "SECTOR R" },
-                    { x: 736, y: 320, t: "SECTOR C" },{ x: 270, y: 420, t: "SECTOR M" },
+                    { x: 265, y: 350, t: "Green Park" },
+                    { x: 635, y: 463, t: "Lakeside Gardens" },
+                    { x: 100, y: 140, t: "Old Orchard" },
                   ].map(({ x, y, t }) => (
-                    <text key={t} x={x} y={y} textAnchor="middle" fill="#5C4A32" fontSize="7.5" fontFamily="var(--font-mono)" opacity="0.4" letterSpacing="1.5">{t}</text>
+                    <text key={t} x={x} y={y} textAnchor="middle" fill={P.label} fontSize="10" fontFamily="var(--font-body)" opacity="0.85"
+                      transform={fix(x, y)}>{t}</text>
                   ))}
 
-                  {/* Compass rose */}
-                  <g transform="translate(850, 50)">
-                    <circle cx="0" cy="0" r="18" fill="#FAF7F2" stroke="#C8B89A" strokeWidth="1"/>
-                    <text x="0" y="-6" textAnchor="middle" fill="#1C0A00" fontSize="9" fontFamily="var(--font-mono)" fontWeight="700">N</text>
-                    <path d="M0 -3 L-4 8 L0 5 L4 8 Z" fill="#1C0A00" opacity="0.6"/>
+                  {/* Industrial zone */}
+                  <rect x="750" y="80" width="150" height="140" fill={P.block} opacity="0.85"/>
+                  <text x="825" y="155" textAnchor="middle" fill={P.sublabel} fontSize="9" fontFamily="var(--font-mono)" letterSpacing="1.5"
+                    transform={fix(825, 155)}>INDUSTRIAL ZONE</text>
+
+                  {/* Neighborhood labels */}
+                  {[
+                    { x: 85, y: 255, t: "OLD TOWN" }, { x: 480, y: 250, t: "MARKET SQUARE" },
+                    { x: 300, y: 60, t: "UNIVERSITY HILL" }, { x: 790, y: 470, t: "RIVERSIDE" },
+                  ].map(({ x, y, t }) => (
+                    <text key={t} x={x} y={y} textAnchor="middle" fill={P.sublabel} fontSize="11" fontFamily="var(--font-mono)" letterSpacing="2.5" opacity="0.9"
+                      transform={fix(x, y)}>{t}</text>
+                  ))}
+
+                  {/* Buildings */}
+                  {buildings.map(([x, y, w, h], i) => (
+                    <rect key={i} x={x} y={y} width={w} height={h} fill={P.building} stroke={P.roadCase} strokeWidth="0.5"/>
+                  ))}
+
+                  {/* Local streets */}
+                  {[70, 260, 430].map(y =>
+                    <line key={`lh${y}`} x1="0" y1={y} x2={MAP_W} y2={y} stroke={P.road} strokeWidth="5"/>
+                  )}
+                  {[60, 280, 520, 760].map(x =>
+                    <line key={`lv${x}`} x1={x} y1="0" x2={x} y2={MAP_H} stroke={P.road} strokeWidth="5"/>
+                  )}
+
+                  {/* Arterials (white + casing) */}
+                  {[167, 499].map(y => (
+                    <g key={`ah${y}`}>
+                      <line x1="0" y1={y} x2={MAP_W} y2={y} stroke={P.roadCase} strokeWidth="16"/>
+                      <line x1="0" y1={y} x2={MAP_W} y2={y} stroke={P.road} strokeWidth="12"/>
+                    </g>
+                  ))}
+                  {[158, 649].map(x => (
+                    <g key={`av${x}`}>
+                      <line x1={x} y1="0" x2={x} y2={MAP_H} stroke={P.roadCase} strokeWidth="16"/>
+                      <line x1={x} y1="0" x2={x} y2={MAP_H} stroke={P.road} strokeWidth="12"/>
+                    </g>
+                  ))}
+                  <g>
+                    <path d="M0 240 L200 156" stroke={P.roadCase} strokeWidth="14" fill="none"/>
+                    <path d="M0 240 L200 156" stroke={P.road} strokeWidth="10" fill="none"/>
+                  </g>
+
+                  {/* Highways (orange + casing) */}
+                  <g>
+                    <line x1="0" y1="361" x2={MAP_W} y2="361" stroke={P.highwayCase} strokeWidth="26"/>
+                    <line x1="0" y1="361" x2={MAP_W} y2="361" stroke={P.highway} strokeWidth="20"/>
+                    <line x1="391" y1="0" x2="391" y2={MAP_H} stroke={P.highwayCase} strokeWidth="24"/>
+                    <line x1="391" y1="0" x2="391" y2={MAP_H} stroke={P.highway} strokeWidth="18"/>
+                    <path d="M640 350 L900 460" stroke={P.highwayCase} strokeWidth="20" fill="none"/>
+                    <path d="M640 350 L900 460" stroke={P.highway} strokeWidth="14" fill="none"/>
+                    <line x1="0" y1="361" x2={MAP_W} y2="361" stroke="#FFFFFF" strokeWidth="1.2" strokeDasharray="12 10" opacity="0.8"/>
+                  </g>
+
+                  {/* Highway shields */}
+                  {[
+                    { x: 200, y: 361, t: "NH 48" }, { x: 391, y: 120, t: "SH 12" }, { x: 770, y: 405, t: "ORR" },
+                  ].map(({ x, y, t }) => (
+                    <g key={t} transform={fix(x, y)}>
+                      <rect x={x - 24} y={y - 9} width="48" height="18" rx="4" fill={P.shieldBg} stroke={P.highwayCase} strokeWidth="1"/>
+                      <text x={x} y={y + 4} textAnchor="middle" fill={P.shieldText} fontSize="9" fontFamily="var(--font-mono)" fontWeight="700">{t}</text>
+                    </g>
+                  ))}
+
+                  {/* Road name labels */}
+                  <text x={450} y={160} textAnchor="middle" fill={P.label} fontSize="9" fontFamily="var(--font-body)"
+                    stroke={P.halo} strokeWidth="3" paintOrder="stroke" transform={fix(450, 160)}>Central Ave</text>
+                  <text x={450} y={492} textAnchor="middle" fill={P.label} fontSize="9" fontFamily="var(--font-body)"
+                    stroke={P.halo} strokeWidth="3" paintOrder="stroke" transform={fix(450, 492)}>Lake View Rd</text>
+                  <text fill={P.label} fontSize="9" fontFamily="var(--font-body)"
+                    stroke={P.halo} strokeWidth="3" paintOrder="stroke" transform={`${fix(150, 300)} rotate(-90 150 300)`} textAnchor="middle">Market St</text>
+                  <text fill={P.label} fontSize="9" fontFamily="var(--font-body)"
+                    stroke={P.halo} strokeWidth="3" paintOrder="stroke" transform={`${fix(641, 200)} rotate(-90 641 200)`} textAnchor="middle">University Rd</text>
+                  <text fill={P.label} fontSize="9" fontFamily="var(--font-body)"
+                    stroke={P.halo} strokeWidth="3" paintOrder="stroke" transform={`${fix(100, 205)} rotate(-24 100 205)`} textAnchor="middle">Canal Rd</text>
+
+                  {/* POIs: hospital, metro, school */}
+                  <g transform={fix(500, 300)}>
+                    <rect x={500 - 8} y={300 - 8} width="16" height="16" rx="3" fill={P.poiBg} stroke="#DADCE0" strokeWidth="1"/>
+                    <path d="M500 295.5 L500 304.5 M495.5 300 L504.5 300" stroke="#D93025" strokeWidth="2.4" strokeLinecap="round"/>
+                    <text x={500} y={318} textAnchor="middle" fill={P.label} fontSize="8.5" fontFamily="var(--font-body)"
+                      stroke={P.halo} strokeWidth="3" paintOrder="stroke">City Hospital</text>
+                  </g>
+                  {[[391, 361], [158, 167]].map(([x, y], i) => (
+                    <g key={i} transform={fix(x, y)}>
+                      <rect x={x - 7} y={y - 22} width="14" height="14" rx="2" fill="#1A73E8"/>
+                      <text x={x} y={y - 11} textAnchor="middle" fill="#FFFFFF" fontSize="9" fontFamily="var(--font-body)" fontWeight="700">M</text>
+                    </g>
+                  ))}
+                  <g transform={fix(250, 452)}>
+                    <circle cx="250" cy="452" r="7" fill={P.poiBg} stroke="#DADCE0" strokeWidth="1"/>
+                    <path d="M246 452 L248.5 454.5 L254 449" stroke="#1A73E8" strokeWidth="1.6" fill="none" strokeLinecap="round"/>
+                    <text x={250} y={468} textAnchor="middle" fill={P.label} fontSize="8.5" fontFamily="var(--font-body)"
+                      stroke={P.halo} strokeWidth="3" paintOrder="stroke">Central School</text>
                   </g>
 
                   {/* Scale bar */}
@@ -5765,38 +5947,41 @@ function PublicCivicMapPage({ onNavigate }: { onNavigate: (p: Page) => void }) {
                     <text x="30" y="-6" textAnchor="middle" fill="#5C4A32" fontSize="7" fontFamily="var(--font-mono)" opacity="0.55">500m</text>
                   </g>
 
-                  {/* ── Complaint markers ── */}
+                  {/* ── Complaint markers (Google-style pins) ── */}
                   {filteredIssues.map(issue => {
-                    const cx = (issue.x / 100) * 900;
-                    const cy = (issue.y / 100) * 580;
+                    const cx = (issue.x / 100) * MAP_W;
+                    const cy = (issue.y / 100) * MAP_H;
                     const color = markerColor(issue);
                     const isSelected = selected?.id === issue.id;
                     const isHovered = hoveredId === issue.id;
+                    const s = isSelected ? 1.35 : isHovered ? 1.18 : 1;
 
                     return (
                       <g key={issue.id} style={{ cursor: "pointer" }}
-                        onClick={e => { e.stopPropagation(); setSelected(isSelected ? null : issue); }}
+                        onClick={e => { e.stopPropagation(); if (suppressClickRef.current) return; setSelected(isSelected ? null : issue); }}
                         onMouseEnter={() => setHoveredId(issue.id)}
                         onMouseLeave={() => setHoveredId(null)}>
-                        {/* Pulse ring */}
+                        {/* Hover/selected halo */}
                         {(isSelected || isHovered) && (
-                          <circle cx={cx} cy={cy} r="20" fill={color} opacity={isSelected ? 0.2 : 0.1}/>
+                          <circle cx={cx} cy={cy - 10} r={22} fill={color} opacity={isSelected ? 0.22 : 0.12}/>
                         )}
-                        {/* Shadow */}
-                        <circle cx={cx + 1} cy={cy + 2} r="10" fill="rgba(28,10,0,0.15)"/>
-                        {/* Main pin body */}
-                        <circle cx={cx} cy={cy} r={isSelected ? 12 : isHovered ? 11 : 9} fill={color}
-                          stroke={isSelected ? "#1C0A00" : "#FAF7F2"} strokeWidth={isSelected ? 2 : 1.5}
-                          style={{ transition: "r 0.15s ease" }}/>
-                        {/* Inner dot */}
-                        <circle cx={cx} cy={cy} r={isSelected ? 4 : 3} fill="white" opacity="0.85"/>
-                        {/* Verified badge */}
-                        {issue.verified && (
-                          <g transform={`translate(${cx + 6}, ${cy - 9})`}>
-                            <circle cx="0" cy="0" r="5" fill="#4A7C5F" stroke="#FAF7F2" strokeWidth="1"/>
-                            <path d="M-2 0 L-0.5 1.5 L2.5 -1.5" stroke="white" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round"/>
-                          </g>
-                        )}
+                        {/* Pin (constant screen size at any zoom) */}
+                        <g transform={`translate(${cx} ${cy}) scale(${s * k})`}>
+                          <ellipse cx="0" cy="1.5" rx="7" ry="2.6" fill="rgba(0,0,0,0.22)"/>
+                          <path d="M0 0 C-1.5 -7 -10 -9.5 -10 -16 A10 10 0 1 1 10 -16 C10 -9.5 1.5 -7 0 0 Z"
+                            fill={color} stroke="#FFFFFF" strokeWidth="2"/>
+                          {isSelected && (
+                            <circle cx="0" cy="-16" r="13.5" fill="none" stroke="#1C0A00" strokeWidth="1.6"/>
+                          )}
+                          <circle cx="0" cy="-16" r="3.6" fill="#FFFFFF"/>
+                          {/* Verified badge */}
+                          {issue.verified && (
+                            <g transform="translate(8.5, -25)">
+                              <circle cx="0" cy="0" r="5.5" fill="#4A7C5F" stroke="#FFFFFF" strokeWidth="1.2"/>
+                              <path d="M-2.2 0 L-0.5 1.8 L2.6 -1.8" stroke="white" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
+                            </g>
+                          )}
+                        </g>
                         {/* Hover tooltip */}
                         {isHovered && !isSelected && (() => {
                           const tipW = 160, tipH = 56;
@@ -5804,11 +5989,11 @@ function PublicCivicMapPage({ onNavigate }: { onNavigate: (p: Page) => void }) {
                           const ty = cy > 500 ? cy - tipH - 8 : cy - tipH / 2;
                           return (
                             <g pointerEvents="none">
-                              <rect x={tx} y={ty} width={tipW} height={tipH} fill="rgba(28,10,0,0.87)" rx="1"/>
-                              <text x={tx + 8} y={ty + 15} fill="#F5F0E8" fontSize="8.5" fontFamily="var(--font-display)" fontWeight="700">{issue.issue}</text>
-                              <text x={tx + 8} y={ty + 28} fill="#C8B89A" fontSize="7" fontFamily="var(--font-mono)">{issue.priority} · {issue.status}</text>
-                              <text x={tx + 8} y={ty + 40} fill="#C8B89A" fontSize="7" fontFamily="var(--font-mono)" opacity="0.7">Impact Score: {issue.score} · {issue.supporters} supporting</text>
-                              <text x={tx + 8} y={ty + 52} fill="#C8B89A" fontSize="6.5" fontFamily="var(--font-mono)" opacity="0.5">{issue.id}</text>
+                              <rect x={tx} y={ty} width={tipW} height={tipH} fill="rgba(32,33,36,0.92)" rx="4"/>
+                              <text x={tx + 8} y={ty + 15} fill="#FFFFFF" fontSize="8.5" fontFamily="var(--font-body)" fontWeight="700">{issue.issue}</text>
+                              <text x={tx + 8} y={ty + 28} fill="#DADCE0" fontSize="7" fontFamily="var(--font-body)">{issue.priority} · {issue.status}</text>
+                              <text x={tx + 8} y={ty + 40} fill="#DADCE0" fontSize="7" fontFamily="var(--font-body)" opacity="0.7">Impact Score: {issue.score} · {issue.supporters} supporting</text>
+                              <text x={tx + 8} y={ty + 52} fill="#DADCE0" fontSize="6.5" fontFamily="var(--font-mono)" opacity="0.5">{issue.id}</text>
                             </g>
                           );
                         })()}
@@ -5818,8 +6003,8 @@ function PublicCivicMapPage({ onNavigate }: { onNavigate: (p: Page) => void }) {
 
                   {/* ── Floating popup card ── */}
                   {selected && (() => {
-                    const cx = (selected.x / 100) * 900;
-                    const cy = (selected.y / 100) * 580;
+                    const cx = (selected.x / 100) * MAP_W;
+                    const cy = (selected.y / 100) * MAP_H;
                     const flipX = cx > 650;
                     const flipY = cy > 380;
                     const px = flipX ? cx - 200 : cx + 20;
@@ -5883,6 +6068,60 @@ function PublicCivicMapPage({ onNavigate }: { onNavigate: (p: Page) => void }) {
                     );
                   })()}
                 </svg>
+              </div>
+
+              {/* ── Google-style overlay controls ── */}
+              {/* Map / Satellite toggle */}
+              <div className="absolute right-3 z-20 rounded-md overflow-hidden border bg-white shadow-md" style={{ top: 52, borderColor: "#DADCE0" }}>
+                <button onClick={() => setSatView(v => !v)} title="Toggle Map / Satellite"
+                  className="px-3 py-2 hover:bg-gray-100 transition-colors"
+                  style={{ fontFamily: "var(--font-body)", fontWeight: 700, fontSize: "0.65rem", color: satView ? "#1A73E8" : "#3C4043" }}>
+                  {satView ? "MAP" : "SAT"}
+                </button>
+              </div>
+
+              {/* Zoom + recenter */}
+              <div className="absolute right-3 bottom-14 z-20 rounded-md overflow-hidden border bg-white shadow-md flex flex-col" style={{ borderColor: "#DADCE0" }}>
+                <button onClick={() => zoomTo(zoomIdx + 1)} title="Zoom in" disabled={zoomIdx >= ZOOMS.length - 1}
+                  className="w-9 h-9 flex items-center justify-center hover:bg-gray-100 transition-colors disabled:opacity-30"
+                  style={{ fontSize: "1.1rem", color: "#3C4043", lineHeight: 1 }}>+</button>
+                <div className="h-px" style={{ background: "#DADCE0" }}/>
+                <button onClick={() => zoomTo(zoomIdx - 1)} title="Zoom out" disabled={zoomIdx <= 0}
+                  className="w-9 h-9 flex items-center justify-center hover:bg-gray-100 transition-colors disabled:opacity-30"
+                  style={{ fontSize: "1.1rem", color: "#3C4043", lineHeight: 1 }}>−</button>
+                <div className="h-px" style={{ background: "#DADCE0" }}/>
+                <button onClick={recenter} title="Recenter"
+                  className="w-9 h-9 flex items-center justify-center hover:bg-gray-100 transition-colors">
+                  <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
+                    <circle cx="7.5" cy="7.5" r="5.5" stroke="#3C4043" strokeWidth="1.4"/>
+                    <circle cx="7.5" cy="7.5" r="1.4" fill="#1A73E8"/>
+                    <path d="M7.5 0.5 L7.5 3 M7.5 12 L7.5 14.5 M0.5 7.5 L3 7.5 M12 7.5 L14.5 7.5" stroke="#3C4043" strokeWidth="1.4" strokeLinecap="round"/>
+                  </svg>
+                </button>
+              </div>
+
+              {/* Compass */}
+              <div className="absolute right-3 z-20 w-9 h-9 rounded-full border bg-white shadow-md flex flex-col items-center justify-center"
+                style={{ bottom: 150, borderColor: "#DADCE0" }} title="North is up">
+                <span style={{ fontFamily: "var(--font-body)", fontWeight: 700, fontSize: "0.6rem", color: "#D93025", lineHeight: 1 }}>N</span>
+                <svg width="10" height="12" viewBox="0 0 10 12" fill="none">
+                  <path d="M5 0 L8.5 9 L5 7 L1.5 9 Z" fill="#3C4043"/>
+                </svg>
+              </div>
+
+              {/* Scale bar */}
+              <div className="absolute left-3 bottom-3 z-20 px-2 py-1 rounded" style={{ background: "rgba(255,255,255,0.92)", boxShadow: "0 1px 2px rgba(60,64,67,0.3)" }}>
+                <div style={{ fontFamily: "var(--font-body)", fontSize: "0.6rem", color: "#3C4043", textAlign: "center", marginBottom: 1 }}>{scaleLabel}</div>
+                <div className="flex items-end" style={{ width: 60 }}>
+                  <div style={{ width: 30, height: 5, background: "#3C4043" }}/>
+                  <div style={{ width: 30, height: 5, background: "#FFFFFF", border: "1px solid #3C4043", borderLeft: "none" }}/>
+                </div>
+              </div>
+
+              {/* Attribution */}
+              <div className="absolute right-2 bottom-1.5 z-20"
+                style={{ fontFamily: "var(--font-body)", fontSize: "0.58rem", color: satView ? "#FFFFFF" : "#5F6368", textShadow: satView ? "0 1px 2px rgba(0,0,0,0.6)" : "none" }}>
+                Map data ©2026 CivicTrace
               </div>
             </div>
 
@@ -10393,14 +10632,18 @@ function AuthorityDashboardPage({ onNavigate }: { onNavigate: (p: Page) => void 
 // ─── Authority Login Page ─────────────────────────────────────────────────────
 function AuthorityLoginPage({ onNavigate }: { onNavigate: (p: Page) => void }) {
   const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [showPass, setShowPass] = useState(false);
-  const [rememberMe, setRememberMe] = useState(false);
+  const [name, setName] = useState("");
+  const [mode, setMode] = useState<"login" | "register">("login");
+  const [step, setStep] = useState<"credentials" | "otp">("credentials");
+  const [otp, setOtp] = useState(["", "", "", "", "", ""]);
+  const otpRefs = useRef<(HTMLInputElement | null)[]>([]);
   const [emailErr, setEmailErr] = useState("");
-  const [passErr, setPassErr] = useState("");
-  const [showForgot, setShowForgot] = useState(false);
   const [entered, setEntered] = useState(false);
   const [signInErr, setSignInErr] = useState("");
+  const [infoMsg, setInfoMsg] = useState("");
+  const [debugOtp, setDebugOtp] = useState("");
+  const [cooldown, setCooldown] = useState(0);
+  const [loading, setLoading] = useState(false);
   const civic = useCivic();
 
   useEffect(() => {
@@ -10408,34 +10651,106 @@ function AuthorityLoginPage({ onNavigate }: { onNavigate: (p: Page) => void }) {
     return () => clearTimeout(t);
   }, []);
 
-  async function handleSignIn() {
-    let ok = true;
-    if (!email.trim()) { setEmailErr("Official email is required."); ok = false; } else setEmailErr("");
-    if (!password.trim()) { setPassErr("Password is required."); ok = false; } else setPassErr("");
-    if (!ok) return;
+  useEffect(() => {
+    if (cooldown <= 0) return;
+    const t = setTimeout(() => setCooldown(c => c - 1), 1000);
+    return () => clearTimeout(t);
+  }, [cooldown]);
+
+  function handleOtpChange(val: string, i: number) {
+    if (!/^\d*$/.test(val)) return;
+    const next = [...otp];
+    next[i] = val.slice(-1);
+    setOtp(next);
+    if (val && i < 5) otpRefs.current[i + 1]?.focus();
+  }
+
+  function handleOtpKey(e: React.KeyboardEvent, i: number) {
+    if (e.key === "Backspace" && !otp[i] && i > 0) otpRefs.current[i - 1]?.focus();
+  }
+
+  function isEmailValid(v: string) {
+    return /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/.test(v.trim());
+  }
+
+  function switchMode(m: "login" | "register") {
+    setMode(m);
+    setStep("credentials");
+    setOtp(["", "", "", "", "", ""]);
     setSignInErr("");
-    // Demo auth: email is the identity (password is not verified server-side).
-    // The backend freezes identity+role at first signup, so an email once used
-    // on the citizen form stays "citizen" — never enter the authority area
-    // with a non-authority account. Verify the saved user before navigating.
-    const name = email.trim().split("@")[0] || "Officer";
-    const logged = await civic.login(name, email.trim(), "authority").catch(() => false);
-    let role: string | null = null;
+    setInfoMsg("");
+    setDebugOtp("");
+    setCooldown(0);
+  }
+
+  async function handleSendCode() {
+    const trimmed = email.trim();
+    if (!isEmailValid(trimmed)) { setEmailErr("Enter a valid official email address."); return; }
+    setEmailErr("");
+    if (mode === "register" && name.trim().length < 2) {
+      setSignInErr("Please enter your full name to register.");
+      return;
+    }
+    setSignInErr("");
+    setInfoMsg("");
+    setDebugOtp("");
+    setLoading(true);
     try {
-      const raw = localStorage.getItem("civictrace_user");
-      role = raw ? (JSON.parse(raw) as { role?: string }).role ?? null : null;
-    } catch {
-      role = null;
+      const res = mode === "register"
+        ? await civic.signupRequestOtp(name.trim(), trimmed, "authority")
+        : await civic.loginRequestOtp(trimmed, "authority");
+      setStep("otp");
+      setOtp(["", "", "", "", "", ""]);
+      setCooldown(60);
+      setInfoMsg(res.message || `Verification code sent to ${trimmed}.`);
+      if (res.debugOtp) setDebugOtp(res.debugOtp);
+      setTimeout(() => otpRefs.current[0]?.focus(), 50);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Could not send code. Try again.";
+      const code = (e as { code?: string })?.code;
+      setSignInErr(
+        code === "ALREADY_REGISTERED"
+          ? "This email is already registered. Please Sign In with OTP instead."
+          : msg
+      );
+    } finally {
+      setLoading(false);
     }
-    if (!logged || !role) {
-      setSignInErr("Backend unreachable — cannot verify authority access. Check your connection and retry.");
+  }
+
+  async function handleVerifyAndSignIn() {
+    const code = otp.join("");
+    if (!/^\d{6}$/.test(code)) {
+      setSignInErr("Please enter the 6-digit code sent to your email.");
       return;
     }
-    if (role !== "authority") {
-      setSignInErr("This email is registered as a citizen account. Use a different official email for authority access.");
-      return;
+    setSignInErr("");
+    setLoading(true);
+    try {
+      const ok = mode === "register"
+        ? await civic.signupVerifyOtp(name.trim(), email.trim(), code, "authority")
+        : await civic.loginVerifyOtp(email.trim(), code, "authority");
+      if (!ok) {
+        setSignInErr("Verification failed. Check the code and retry.");
+        return;
+      }
+      let role: string | null = null;
+      try {
+        const raw = localStorage.getItem("civictrace_user");
+        role = raw ? (JSON.parse(raw) as { role?: string }).role ?? null : null;
+      } catch {
+        role = null;
+      }
+      if (role !== "authority") {
+        setSignInErr("This email is registered as a citizen account. Use a different official email for authority access.");
+        return;
+      }
+      onNavigate("authority-dashboard");
+    } catch (e) {
+      setSignInErr(e instanceof Error ? e.message : "Verification failed. Try again.");
+    } finally {
+      setLoading(false);
     }
-    onNavigate("authority-dashboard");
   }
 
   const navLinks: { l: string; p: Page | null }[] = [
@@ -10523,9 +10838,44 @@ function AuthorityLoginPage({ onNavigate }: { onNavigate: (p: Page) => void }) {
                   <span className="font-display font-bold text-lg" style={{ color: "#1C0A00" }}>Authority Portal</span>
                 </div>
                 <p style={{ fontFamily: "var(--font-mono)", fontSize: "0.6rem", color: "#5C4A32", letterSpacing: "0.08em", textTransform: "uppercase", opacity: 0.7 }}>
-                  Sign in to manage civic complaints and resolutions.
+                  {mode === "login" ? "Sign in with a one-time email code." : "Register your official email with a verification code."}
                 </p>
               </div>
+
+              {/* Login / Register toggle */}
+              <div className="flex border mb-6" style={{ borderColor: "#C8B89A", borderRadius: "1px" }}>
+                {(["login", "register"] as const).map(m => (
+                  <button key={m} onClick={() => switchMode(m)}
+                    className="flex-1 py-2 transition-colors"
+                    style={{
+                      fontFamily: "var(--font-mono)", fontSize: "0.6rem", letterSpacing: "0.1em", textTransform: "uppercase",
+                      background: mode === m ? "#1C0A00" : "transparent",
+                      color: mode === m ? "#F5F0E8" : "#5C4A32",
+                      borderRadius: "0px",
+                    }}>
+                    {m === "login" ? "Sign In" : "Register"}
+                  </button>
+                ))}
+              </div>
+
+              {mode === "register" && step === "credentials" && (
+                <div className="mb-5">
+                  <label className="block mb-1.5" style={{ fontFamily: "var(--font-mono)", fontSize: "0.58rem", letterSpacing: "0.12em", textTransform: "uppercase", color: "#5C4A32" }}>
+                    Full Name
+                  </label>
+                  <input
+                    type="text"
+                    value={name}
+                    onChange={e => setName(e.target.value)}
+                    placeholder="Your name"
+                    className="w-full px-3 py-2.5 border outline-none transition-all"
+                    style={{
+                      background: "#F5F0E8", borderColor: "#C8B89A", borderRadius: "1px",
+                      fontFamily: "var(--font-body)", fontSize: "0.85rem", color: "#1C0A00",
+                    }}
+                  />
+                </div>
+              )}
 
               {/* Email field */}
               <div className="mb-5">
@@ -10537,9 +10887,10 @@ function AuthorityLoginPage({ onNavigate }: { onNavigate: (p: Page) => void }) {
                   value={email}
                   onChange={e => { setEmail(e.target.value); if (e.target.value) setEmailErr(""); }}
                   placeholder="Enter your official email"
+                  disabled={step === "otp"}
                   className="w-full px-3 py-2.5 border outline-none transition-all"
                   style={{
-                    background: "#F5F0E8", borderColor: emailErr ? "#9B3A3A" : "#C8B89A", borderRadius: "1px",
+                    background: step === "otp" ? "#EDE5D4" : "#F5F0E8", borderColor: emailErr ? "#9B3A3A" : "#C8B89A", borderRadius: "1px",
                     fontFamily: "var(--font-body)", fontSize: "0.85rem", color: "#1C0A00",
                   }}
                   onFocus={e => { if (!emailErr) e.target.style.borderColor = "#5C4A32"; }}
@@ -10548,84 +10899,71 @@ function AuthorityLoginPage({ onNavigate }: { onNavigate: (p: Page) => void }) {
                 {emailErr && <p className="mt-1" style={{ fontFamily: "var(--font-mono)", fontSize: "0.58rem", color: "#9B3A3A", letterSpacing: "0.05em" }}>{emailErr}</p>}
               </div>
 
-              {/* Password field */}
-              <div className="mb-5">
-                <label className="block mb-1.5" style={{ fontFamily: "var(--font-mono)", fontSize: "0.58rem", letterSpacing: "0.12em", textTransform: "uppercase", color: "#5C4A32" }}>
-                  Password
-                </label>
-                <div className="relative">
-                  <input
-                    type={showPass ? "text" : "password"}
-                    value={password}
-                    onChange={e => { setPassword(e.target.value); if (e.target.value) setPassErr(""); }}
-                    placeholder="Enter your password"
-                    className="w-full px-3 py-2.5 border outline-none transition-all pr-10"
+              {/* OTP field (replaces password — code proves inbox ownership) */}
+              {step === "otp" && (
+                <div className="mb-5">
+                  <label className="block mb-1.5" style={{ fontFamily: "var(--font-mono)", fontSize: "0.58rem", letterSpacing: "0.12em", textTransform: "uppercase", color: "#5C4A32" }}>
+                    6-Digit Verification Code
+                  </label>
+                  <div className="mb-3" style={{ fontFamily: "var(--font-body)", fontSize: "0.78rem", color: "#5C4A32", opacity: 0.75 }}>
+                    Sent to {email.trim()}{" "}
+                    <button onClick={() => { setStep("credentials"); setOtp(["", "", "", "", "", ""]); setDebugOtp(""); setInfoMsg(""); setCooldown(0); }}
+                      className="hover:opacity-80 transition-opacity"
+                      style={{ fontFamily: "var(--font-mono)", fontSize: "0.62rem", color: "#3A6B9B" }}>
+                      (change)
+                    </button>
+                  </div>
+                  <div className="flex gap-2">
+                    {otp.map((digit, i) => (
+                      <input key={i}
+                        ref={el => { otpRefs.current[i] = el; }}
+                        type="text" inputMode="numeric" maxLength={1}
+                        value={digit}
+                        onChange={e => handleOtpChange(e.target.value, i)}
+                        onKeyDown={e => { handleOtpKey(e, i); if (e.key === "Enter") handleVerifyAndSignIn(); }}
+                        className="outline-none"
+                        style={{
+                          width: "100%", maxWidth: 52, height: 52, textAlign: "center",
+                          border: "1px solid #C8B89A", borderRadius: "1px", background: "#F5F0E8",
+                          color: "#1C0A00", fontFamily: "var(--font-display)", fontWeight: 700, fontSize: "1.2rem",
+                        }}
+                      />
+                    ))}
+                  </div>
+                  <button onClick={handleSendCode} disabled={cooldown > 0 || loading}
+                    className="mt-2 transition-opacity"
                     style={{
-                      background: "#F5F0E8", borderColor: passErr ? "#9B3A3A" : "#C8B89A", borderRadius: "1px",
-                      fontFamily: "var(--font-body)", fontSize: "0.85rem", color: "#1C0A00",
-                    }}
-                    onFocus={e => { if (!passErr) e.target.style.borderColor = "#5C4A32"; }}
-                    onBlur={e => { if (!passErr) e.target.style.borderColor = "#C8B89A"; }}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowPass(v => !v)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 opacity-50 hover:opacity-80 transition-opacity"
-                  >
-                    {showPass ? (
-                      <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                        <path d="M1 1L15 15M6.5 6.7C6.2 7.0 6 7.5 6 8C6 9.1 6.9 10 8 10C8.5 10 8.9 9.8 9.3 9.5" stroke="#5C4A32" strokeWidth="1.2" strokeLinecap="round"/>
-                        <path d="M3 3.8C1.8 5.0 1 6.5 1 8C1 8 3.5 13 8 13C9.6 13 11 12.4 12.2 11.6" stroke="#5C4A32" strokeWidth="1.2" strokeLinecap="round"/>
-                        <path d="M6 3.1C6.6 3.0 7.3 3 8 3C12.5 3 15 8 15 8C15 8 14.3 9.4 13 10.6" stroke="#5C4A32" strokeWidth="1.2" strokeLinecap="round"/>
-                      </svg>
-                    ) : (
-                      <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                        <path d="M8 5C6.3 5 5 6.3 5 8C5 9.7 6.3 11 8 11C9.7 11 11 9.7 11 8C11 6.3 9.7 5 8 5Z" stroke="#5C4A32" strokeWidth="1.2" fill="none"/>
-                        <path d="M1 8C1 8 3.5 3 8 3C12.5 3 15 8 15 8C15 8 12.5 13 8 13C3.5 13 1 8 1 8Z" stroke="#5C4A32" strokeWidth="1.2" fill="none"/>
-                      </svg>
-                    )}
+                      fontFamily: "var(--font-mono)", fontSize: "0.58rem", letterSpacing: "0.08em", color: "#3A6B9B",
+                      opacity: cooldown > 0 || loading ? 0.4 : 0.8,
+                    }}>
+                    {cooldown > 0 ? `Resend code in ${cooldown}s` : "Resend code"}
                   </button>
+                  {debugOtp && (
+                    <div className="mt-3 p-3 border" style={{ borderColor: "#B8872A", background: "#FBF6EB", borderRadius: "1px" }}>
+                      <div style={{ fontFamily: "var(--font-mono)", fontSize: "0.58rem", letterSpacing: "0.08em", color: "#5C4A32" }}>
+                        DEV MODE — email delivery is off. Your code is:
+                      </div>
+                      <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: "1.4rem", color: "#1C0A00", letterSpacing: "0.3em" }}>
+                        {debugOtp}
+                      </div>
+                    </div>
+                  )}
                 </div>
-                {passErr && <p className="mt-1" style={{ fontFamily: "var(--font-mono)", fontSize: "0.58rem", color: "#9B3A3A", letterSpacing: "0.05em" }}>{passErr}</p>}
-              </div>
+              )}
 
-              {/* Remember me + Forgot */}
-              <div className="flex items-center justify-between mb-7">
-                <label className="flex items-center gap-2 cursor-pointer group">
-                  <button
-                    type="button"
-                    onClick={() => setRememberMe(v => !v)}
-                    className="w-4 h-4 border flex items-center justify-center transition-colors flex-shrink-0"
-                    style={{ borderColor: "#C8B89A", borderRadius: "1px", background: rememberMe ? "#1C0A00" : "#F5F0E8" }}
-                  >
-                    {rememberMe && (
-                      <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-                        <path d="M2 5L4.2 7.2L8 3" stroke="#F5F0E8" strokeWidth="1.3" strokeLinecap="round"/>
-                      </svg>
-                    )}
-                  </button>
-                  <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.58rem", letterSpacing: "0.08em", textTransform: "uppercase", color: "#5C4A32", opacity: 0.75 }}>
-                    Remember me
-                  </span>
-                </label>
-                <button
-                  type="button"
-                  onClick={() => setShowForgot(true)}
-                  className="hover:opacity-100 transition-opacity"
-                  style={{ fontFamily: "var(--font-mono)", fontSize: "0.58rem", letterSpacing: "0.08em", textTransform: "uppercase", color: "#3A6B9B", opacity: 0.8, textDecoration: "underline", textUnderlineOffset: "3px" }}
-                >
-                  Forgot password?
-                </button>
-              </div>
+              {infoMsg && !signInErr && (
+                <p className="mb-4 text-center" style={{ fontFamily: "var(--font-mono)", fontSize: "0.58rem", color: "#4A7C5F", letterSpacing: "0.05em" }}>{infoMsg}</p>
+              )}
 
-              {/* Sign in button */}
+              {/* Send-code / Verify button */}
               <button
                 type="button"
-                onClick={handleSignIn}
+                onClick={() => (step === "otp" ? handleVerifyAndSignIn() : handleSendCode())}
+                disabled={loading}
                 className="w-full py-3 font-mono text-xs tracking-widest uppercase transition-all hover:opacity-90 active:scale-[0.99]"
-                style={{ background: "#1C0A00", color: "#F5F0E8", borderRadius: "1px", letterSpacing: "0.15em" }}
+                style={{ background: "#1C0A00", color: "#F5F0E8", borderRadius: "1px", letterSpacing: "0.15em", opacity: loading ? 0.7 : 1 }}
               >
-                Sign In
+                {loading ? "Please wait…" : step === "otp" ? "Verify & Sign In" : mode === "login" ? "Send Login Code" : "Send Verification Code"}
               </button>
               {signInErr && (
                 <p className="mt-2 text-center" style={{ fontFamily: "var(--font-mono)", fontSize: "0.58rem", color: "#9B3A3A", letterSpacing: "0.05em" }}>{signInErr}</p>
@@ -10770,28 +11108,6 @@ function AuthorityLoginPage({ onNavigate }: { onNavigate: (p: Page) => void }) {
         </div>
       </footer>
 
-      {/* ── Forgot password modal ── */}
-      {showForgot && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: "rgba(28,10,0,0.45)" }}>
-          <div className="border p-8 mx-4 max-w-sm w-full relative" style={{ background: "#FAF7F2", borderColor: "#C8B89A", borderRadius: "2px" }}>
-            <div className="absolute top-0 right-0 w-6 h-6 border-l border-b" style={{ borderColor: "#C8B89A" }} />
-            <div className="font-mono text-xs tracking-widest uppercase mb-4 opacity-50" style={{ color: "#5C4A32", letterSpacing: "0.15em" }}>
-              Password Recovery
-            </div>
-            <h3 className="font-display font-bold text-lg mb-3" style={{ color: "#1C0A00" }}>Access Recovery</h3>
-            <p className="leading-relaxed mb-6" style={{ color: "#5C4A32", fontSize: "0.875rem" }}>
-              Password recovery is available through your department administrator. Contact your department IT officer or system administrator to reset your credentials.
-            </p>
-            <button
-              onClick={() => setShowForgot(false)}
-              className="w-full py-2.5 font-mono text-xs tracking-widest uppercase transition-colors hover:bg-[#EDE5D4]"
-              style={{ border: "1px solid #C8B89A", borderRadius: "1px", color: "#1C0A00", letterSpacing: "0.12em" }}
-            >
-              Close
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

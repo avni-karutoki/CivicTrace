@@ -27,7 +27,14 @@ export async function apiFetch(
       (data && typeof data === "object" && (data as { error?: string }).error) ||
       (typeof data === "string" && data.slice(0, 200)) ||
       `Request failed (${response.status})`;
-    throw new Error(message);
+    const err = new Error(message) as Error & { code?: string; status?: number; retryAfterSec?: number };
+    if (data && typeof data === "object") {
+      const d = data as { code?: string; retryAfterSec?: number };
+      if (d.code) err.code = d.code;
+      if (d.retryAfterSec) err.retryAfterSec = d.retryAfterSec;
+    }
+    err.status = response.status;
+    throw err;
   }
 
   return data;
@@ -124,9 +131,28 @@ export interface LeaderboardRow {
 const post = (endpoint: string, body: unknown) =>
   apiFetch(endpoint, { method: "POST", body: JSON.stringify(body) });
 
+export interface OtpRequestResponse {
+  ok: boolean;
+  message: string;
+  emailSent: boolean;
+  expiresInSec: number;
+  retryAfterSec?: number;
+  /** Present only in non-production when SMTP email delivery is off. */
+  debugOtp?: string;
+}
+
 export const api = {
-  login: (name: string, contact: string, role?: string): Promise<{ token: string; user: BackendUser }> =>
-    post("/auth/login", { name, contact, role }),
+  signupRequestOtp: (name: string, email: string, role?: string): Promise<OtpRequestResponse> =>
+    post("/auth/signup/request-otp", { name, email, role }),
+
+  signupVerifyOtp: (name: string, email: string, otp: string, role?: string): Promise<{ token: string; user: BackendUser }> =>
+    post("/auth/signup/verify-otp", { name, email, otp, role }),
+
+  loginRequestOtp: (email: string, role?: string): Promise<OtpRequestResponse> =>
+    post("/auth/login/request-otp", { email, role }),
+
+  loginVerifyOtp: (email: string, otp: string, role?: string): Promise<{ token: string; user: BackendUser }> =>
+    post("/auth/login/verify-otp", { email, otp, role }),
 
   createComplaint: (body: {
     category: string;
