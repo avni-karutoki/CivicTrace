@@ -104,6 +104,36 @@ CHAIN_ID=84532
 CONTRACT_ADDRESS=0xYourDeployedContract
 ANCHOR_PRIVATE_KEY=0xYourServerKeyWithFaucetFunds
 EXPLORER_URL=https://sepolia.basescan.org
+
+# AI photo description (fills Additional Note, still editable; off when unset)
+GEMINI_API_KEY=AIza...
+GEMINI_MODEL=gemini-3.5-flash
+
+# Dev-mode OTP (shows login code in UI; DEV ONLY, disable in production)
+OTP_DEBUG=true
+```
+
+### Frontend (`frontend/.env`)
+
+```env
+VITE_API_URL=http://localhost:4000
+# Round 3 exact-location step + live GPS map (Mapbox GL JS).
+# 1. Create a free token: https://account.mapbox.com > Tokens (scopes:
+#    styles:tiles, styles:read, fonts:read, geocoding:read).
+# 2. VITE_MAPBOX_TOKEN=pk.eyJ...
+# 3. Restart the frontend dev server.
+# Without a token: manual coordinates fallback + illustrated atlas still work.
+```
+
+### Database migration (Round 3 location fields)
+
+```bash
+# In Supabase Studio > SQL Editor, run:
+backend/supabase/migration_location.sql
+# Adds location_accuracy/address/source/confirmed/timestamp/hash,
+# resolution_* + proof_distance_m, status_events.location_hash.
+# Idempotent; old complaints keep working. The backend also tolerates
+# pre-migration databases (falls back gracefully).
 ```
 
 ### Blockchain (`blockchain/.env`)
@@ -143,6 +173,19 @@ AMOY_RPC=https://rpc-amoy.polygon.technology
 - Verification compares Postgres `this_hash` ↔ contract `latestHash`
 - Zero impact when disabled (`ONCHAIN_ENABLED=false`)
 
+### 6. Exact Location Detection + Verification (Round 3)
+- Report flow: Category → Evidence → Details → **Location (Mapbox)** → Submitted
+- GPS detect, draggable pin, Mapbox search, reverse-geocoded address, accuracy warning
+- No submit without a confirmed location (backend-validated: ranges, source, confirmation)
+- Location canonical hash (`location_hash`) committed into the SHA-256 chain on filing;
+  authority corrections append a `LOCATION_UPDATED` audit event (old → new hash, actor, reason)
+- Location-aware dedup: category (0.35) + Haversine proximity (0.40) + text similarity (0.25)
+- Repeat/recurrence signal: same-category RESOLVED complaint within 150 m →
+  "Possible recurring issue" card with previous ID, distance, proof status, confidence
+- Proof-of-fix optionally captures authority GPS → "Proof submitted XX m away" as evidence
+- Live GPS civic map positions markers by stored coordinates (no identity shown)
+- Privacy-first: coordinates are public for accountability; names/emails/phones never are
+
 ---
 
 ## API Endpoints
@@ -157,6 +200,8 @@ AMOY_RPC=https://rpc-amoy.polygon.technology
 | POST | `/complaints/:id/status` | ✓ | Authority updates status |
 | POST | `/complaints/:id/proof-of-fix` | ✓ | Authority uploads fix photo |
 | POST | `/complaints/:id/dispute` | ✓ | Citizen reopens complaint |
+| POST | `/complaints/:id/location` | ✓ authority | Correct location (LOCATION_UPDATED audit event) |
+| POST | `/ai/describe-photo` | ✓ | Gemini description of complaint photo |
 | GET | `/complaints/:id/verification` | — | Full hash-chain + on-chain anchor |
 | GET | `/leaderboard` | — | Departments ranked by resolution |
 | GET | `/notifications` | — | Escalation notifications |
@@ -179,7 +224,11 @@ departments
 complaints
   id, tracking_code, category, description, lat, lng, priority,
   status, department_id, complainant_id, support_count,
-  last_action_at, created_at, resolved_at, anchor_tx, anchor_chain_id
+  last_action_at, created_at, resolved_at, anchor_tx, anchor_chain_id,
+  location_accuracy, location_address, location_source,
+  location_confirmed, location_timestamp, location_hash,
+  resolution_lat, resolution_lng, resolution_location_accuracy,
+  resolution_timestamp, proof_distance_m
 
 complaint_reports
   id, complaint_id, reporter_id, lat, lng, note, created_at
@@ -190,7 +239,8 @@ evidence
 
 status_events (hash chain)
   id, complaint_id, from_status, to_status, actor_id, actor_role,
-  note, prev_hash, this_hash, created_at, tx_hash, chain_id
+  note, prev_hash, this_hash, created_at, tx_hash, chain_id,
+  location_hash (commits canonical location into the chain)
 
 notifications
   id, department_id, complaint_id, message, created_at, read

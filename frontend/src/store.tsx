@@ -24,6 +24,16 @@ interface AuthState {
 
 // ─── Report draft (shared across the 3 report steps) ───
 
+export interface ReportLocation {
+  lat: number;
+  lng: number;
+  accuracy: number | null; // GPS accuracy in meters (null when unknown/manual)
+  address: string | null; // reverse-geocoded address
+  source: "gps" | "map_search" | "manual_adjustment";
+  confirmed: boolean;
+  timestamp: string | null; // ISO capture/confirm time
+}
+
 export interface ReportDraft {
   category: string;
   categoryLabel: string;
@@ -35,6 +45,8 @@ export interface ReportDraft {
   description: string;
   lat: number | null;
   lng: number | null;
+  /** Round 3: confirmed complaint location (required to submit). */
+  location: ReportLocation | null;
 }
 
 const DEFAULT_DRAFT: ReportDraft = {
@@ -48,17 +60,28 @@ const DEFAULT_DRAFT: ReportDraft = {
   description: "",
   lat: null,
   lng: null,
+  location: null,
 };
 
 // Fallback location (New Delhi) when geolocation is unavailable.
 const FALLBACK_LAT = 28.6139;
 const FALLBACK_LNG = 77.209;
 
+export interface RepeatSignal {
+  tracking_code: string;
+  status: string;
+  resolved_at: string | null;
+  distance_m: number;
+  proof_available: boolean;
+  confidence: number;
+}
+
 export interface SubmitResult {
   ok: boolean;
   merged: boolean;
   complaint: BackendComplaint | null;
   trackingCode: string;
+  repeat: RepeatSignal | null;
   error: string;
 }
 
@@ -77,7 +100,11 @@ interface CivicState extends AuthState {
   submitting: boolean;
   submitReport: () => Promise<SubmitResult>;
   updateStatus: (id: string, toStatus: string, note?: string, departmentId?: string) => Promise<void>;
-  submitProof: (id: string, photoDataUrl: string) => Promise<void>;
+  submitProof: (
+    id: string,
+    photoDataUrl: string,
+    resolution?: { lat: number; lng: number; accuracy?: number | null; timestamp?: string | null } | null
+  ) => Promise<void>;
   disputeComplaint: (id: string, reason?: string) => Promise<void>;
   acceptFix: (id: string) => Promise<void>;
   actionError: string;
@@ -188,12 +215,25 @@ export function CivicProvider({ children }: { children: ReactNode }) {
     setSubmitting(true);
     setActionError("");
     try {
+      // Round 3: a confirmed location is mandatory — never silently fall back.
+      if (!draft.location?.confirmed) {
+        throw new Error("Please confirm the complaint location on the map before submitting.");
+      }
       const res = await api.createComplaint({
         category: draft.category || "roads",
         description: draft.description || draft.summary || undefined,
-        lat: draft.lat ?? FALLBACK_LAT,
-        lng: draft.lng ?? FALLBACK_LNG,
+        lat: draft.location.lat,
+        lng: draft.location.lng,
         priority: draft.priority,
+        location: {
+          lat: draft.location.lat,
+          lng: draft.location.lng,
+          accuracy: draft.location.accuracy,
+          address: draft.location.address,
+          source: draft.location.source,
+          confirmed: true,
+          timestamp: draft.location.timestamp,
+        },
         ...(draft.photoDataUrl
           ? { photo: { dataUrl: draft.photoDataUrl, capturedAt: new Date().toISOString() } }
           : {}),
@@ -203,6 +243,7 @@ export function CivicProvider({ children }: { children: ReactNode }) {
         merged: res.merged,
         complaint: res.complaint,
         trackingCode: res.complaint.tracking_code,
+        repeat: (res.repeat ?? null) as RepeatSignal | null,
         error: "",
       };
       setLastResult(result);
@@ -211,7 +252,7 @@ export function CivicProvider({ children }: { children: ReactNode }) {
     } catch (e) {
       const message = e instanceof Error ? e.message : "Submit failed";
       setActionError(message);
-      const result: SubmitResult = { ok: false, merged: false, complaint: null, trackingCode: "", error: message };
+      const result: SubmitResult = { ok: false, merged: false, complaint: null, trackingCode: "", repeat: null, error: message };
       setLastResult(result);
       return result;
     } finally {
@@ -230,10 +271,14 @@ export function CivicProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const submitProof = useCallback(async (id: string, photoDataUrl: string) => {
+  const submitProof = useCallback(async (
+    id: string,
+    photoDataUrl: string,
+    resolution?: { lat: number; lng: number; accuracy?: number | null; timestamp?: string | null } | null
+  ) => {
     setActionError("");
     try {
-      await api.proofOfFix(id, { dataUrl: photoDataUrl, capturedAt: new Date().toISOString() });
+      await api.proofOfFix(id, { dataUrl: photoDataUrl, capturedAt: new Date().toISOString() }, resolution ?? null);
     } catch (e) {
       const message = e instanceof Error ? e.message : "Proof upload failed";
       setActionError(message);

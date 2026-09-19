@@ -6,6 +6,7 @@ import { asyncHandler } from "./asyncHandler.js";
 import authRoutes from "./routes/auth.js";
 import complaintsRoutes from "./routes/complaints.js";
 import leaderboardRoutes from "./routes/leaderboard.js";
+import aiRoutes from "./routes/ai.js";
 import { startEscalationCron, runEscalationSweep } from "./escalation.js";
 import { isOnchainEnabled, explorerTxUrl } from "./onchain.js";
 
@@ -75,6 +76,7 @@ app.get("/departments", asyncHandler(async (req, res) => {
 app.use("/auth", authRoutes);
 app.use("/complaints", complaintsRoutes);
 app.use("/leaderboard", leaderboardRoutes);
+app.use("/ai", aiRoutes);
 
 // Manually trigger an escalation sweep (handy for demoing without waiting 30s)
 app.post("/admin/run-escalation", asyncHandler(async (req, res) => {

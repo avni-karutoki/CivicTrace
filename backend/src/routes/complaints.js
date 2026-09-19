@@ -2,8 +2,57 @@ import { Router } from "express";
 import { nanoid } from "nanoid";
 import { supabase } from "../supabase.js";
 import { asyncHandler } from "../asyncHandler.js";
-import { findLikelyDuplicate, bumpPriority } from "../dedup.js";
+import { findLikelyDuplicate, findRepeatSignal, bumpPriority } from "../dedup.js";
 import { appendStatusEvent, verifyChain, sha256Hex } from "../hashchain.js";
+import { validateLocation, locationHash, haversineMeters, formatDistance } from "../location.js";
+
+// Insert helper that tolerates databases where migration_location.sql hasn't
+// run yet (drops unknown location columns and retries once). Keeps pre-
+// migration deployments working per backward-compatibility requirements.
+const LOCATION_COLUMNS = new Set([
+  "location_accuracy", "location_address", "location_source",
+  "location_confirmed", "location_timestamp", "location_hash",
+  "resolution_lat", "resolution_lng", "resolution_location_accuracy",
+  "resolution_timestamp", "proof_distance_m",
+]);
+
+async function insertComplaintRow(row) {
+  let { error } = await supabase.from("complaints").insert(row);
+  if (error && /could not find|does not exist|unknown column|no such column/i.test(error.message ?? "")) {
+    const legacy = Object.fromEntries(
+      Object.entries(row).filter(([k]) => !LOCATION_COLUMNS.has(k))
+    );
+    ({ error } = await supabase.from("complaints").insert(legacy));
+  }
+  return error;
+}
+
+async function updateComplaintRow(id, patch) {
+  let { error } = await supabase.from("complaints").update(patch).eq("id", id);
+  if (error && /could not find|does not exist|unknown column|no such column/i.test(error.message ?? "")) {
+    const legacy = Object.fromEntries(
+      Object.entries(patch).filter(([k]) => !LOCATION_COLUMNS.has(k))
+    );
+    if (Object.keys(legacy).length) {
+      ({ error } = await supabase.from("complaints").update(legacy).eq("id", id));
+    }
+  }
+  return error;
+}
+
+/** Shape a repeat signal for API responses (never includes complainant data). */
+function publicRepeatSignal(repeat) {
+  if (!repeat) return null;
+  const c = repeat.complaint;
+  return {
+    tracking_code: c.tracking_code,
+    status: c.status,
+    resolved_at: c.resolved_at ?? null,
+    distance_m: repeat.distanceM,
+    proof_available: repeat.proofAvailable,
+    confidence: repeat.confidence,
+  };
+}
 import { anchorStatusEvent, verifyOnchain, explorerTxUrl, isOnchainEnabled } from "../onchain.js";
 
 // Best-effort anchor saver: ignores missing-column errors so old DBs keep working.
@@ -53,16 +102,36 @@ function toAuthorityView(complaint) {
   return rest;
 }
 
-// POST /complaints  { category, description, lat, lng, priority?, photo:{ dataUrl, capturedAt } }
-// Runs AI Spatial Dedup before creating a new record.
+// POST /complaints  { category, description, lat, lng, priority?,
+//   photo:{ dataUrl, capturedAt },
+//   location: { lat, lng, accuracy?, address?, source?, confirmed, timestamp? } }
+// Runs location-aware dedup + repeat/recurrence detection before creating.
+// New clients send a confirmed `location`; legacy lat/lng-only payloads are
+// still accepted (stored unconfirmed) so old app versions keep working.
 router.post("/", requireUser, async (req, res) => {
   try {
-    const { category, description, lat, lng, priority, photo } = req.body;
-    if (!category || lat == null || lng == null) {
-      return res.status(400).json({ error: "category, lat, lng are required" });
-    }
+    const { category, description, priority, photo } = req.body;
 
-    const dedup = await findLikelyDuplicate({ category, lat, lng });
+    let loc = null;
+    if (req.body?.location && typeof req.body.location === "object") {
+      const check = validateLocation(req.body.location, { requireConfirmed: true });
+      if (!check.ok) return res.status(400).json({ error: check.error });
+      loc = check.clean;
+    } else {
+      // Legacy payload (pre-location frontend): accept raw lat/lng, unconfirmed.
+      const { lat, lng } = req.body;
+      const check = validateLocation({ lat, lng }, { requireConfirmed: false });
+      if (!check.ok) {
+        if (!category) return res.status(400).json({ error: "category, lat, lng are required" });
+        return res.status(400).json({ error: check.error });
+      }
+      loc = check.clean;
+    }
+    if (!category) return res.status(400).json({ error: "category is required" });
+    const { lat, lng } = loc;
+    const locHash = locationHash(loc);
+
+    const dedup = await findLikelyDuplicate({ category, lat, lng, description });
     const now = new Date().toISOString();
 
     if (dedup.match) {
@@ -120,10 +189,15 @@ router.post("/", requireUser, async (req, res) => {
         .single();
       if (fetchError) throw fetchError;
 
+      let repeat = null;
+      try {
+        repeat = await findRepeatSignal({ category, lat, lng, description });
+      } catch { /* repeat signal is advisory — merge still succeeds */ }
       return res.status(200).json({
         merged: true,
         dedup_score: dedup.score,
         distance_m: dedup.distanceM,
+        repeat: publicRepeatSignal(repeat),
         complaint: toAuthorityView(updated),
       });
     }
@@ -131,13 +205,19 @@ router.post("/", requireUser, async (req, res) => {
     // No match — create a genuinely new complaint.
     const id = nanoid();
     const trackingCode = genTrackingCode();
-    const { error: insertError } = await supabase.from("complaints").insert({
+    const insertError = await insertComplaintRow({
       id,
       tracking_code: trackingCode,
       category,
       description: description ?? null,
       lat,
       lng,
+      location_accuracy: loc.accuracy,
+      location_address: loc.address,
+      location_source: loc.source,
+      location_confirmed: loc.confirmed,
+      location_timestamp: loc.timestamp,
+      location_hash: locHash,
       priority: priority ?? "normal",
       status: "REPORTED",
       department_id: null,
@@ -163,13 +243,25 @@ router.post("/", requireUser, async (req, res) => {
       if (evError) throw evError;
     }
 
+    // Round 3 repeat signal: same-category RESOLVED complaint nearby. The new
+    // complaint is still created — this is evidence, not an accusation — and
+    // the linkage is recorded in the tamper-evident chain note.
+    let repeat = null;
+    try {
+      repeat = await findRepeatSignal({ category, lat, lng, description });
+    } catch { /* advisory only */ }
+    const filedNote = repeat
+      ? `Complaint filed. Possible repeat of ${repeat.complaint.tracking_code} (${repeat.distanceM}m away, confidence ${repeat.confidence}).`
+      : "Complaint filed";
+
     const filedEvent = await appendStatusEvent({
       complaintId: id,
       fromStatus: null,
       toStatus: "REPORTED",
       actorId: req.user.id,
       actorRole: "citizen",
-      note: "Complaint filed",
+      note: filedNote,
+      locHash,
     });
     anchorInBackground({ event: filedEvent, complaintId: id, trackingCode, fromStatus: "", toStatus: "REPORTED" });
 
@@ -180,7 +272,12 @@ router.post("/", requireUser, async (req, res) => {
       .single();
     if (fetchError) throw fetchError;
 
-    res.status(201).json({ merged: false, complaint: toAuthorityView(created), tracking_code: trackingCode });
+    res.status(201).json({
+      merged: false,
+      complaint: toAuthorityView(created),
+      tracking_code: trackingCode,
+      repeat: publicRepeatSignal(repeat),
+    });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -309,6 +406,74 @@ router.post("/:id/status", requireUser, async (req, res) => {
   }
 });
 
+// POST /complaints/:id/location  { location: {...}, reason? }  (authority only)
+// Corrects a complaint's location WITHOUT silently overwriting history: the
+// original location stays in the chain and a LOCATION_UPDATED audit event
+// (old hash → new hash, actor, reason, timestamp) is appended.
+router.post("/:id/location", requireUser, async (req, res) => {
+  try {
+    if (req.user.role !== "authority") {
+      return res.status(403).json({ error: "Only authorities can update a complaint location." });
+    }
+    const { data: complaint, error } = await supabase
+      .from("complaints")
+      .select("*")
+      .eq("id", req.params.id)
+      .maybeSingle();
+    if (error) throw error;
+    if (!complaint) return res.status(404).json({ error: "not found" });
+
+    const check = validateLocation(req.body?.location, { requireConfirmed: true });
+    if (!check.ok) return res.status(400).json({ error: check.error });
+    const loc = check.clean;
+    const newLocHash = locationHash(loc);
+    const now = new Date().toISOString();
+
+    const oldLoc = {
+      lat: complaint.lat,
+      lng: complaint.lng,
+      hash: complaint.location_hash ?? null,
+    };
+    const updateError = await updateComplaintRow(complaint.id, {
+      lat: loc.lat,
+      lng: loc.lng,
+      location_accuracy: loc.accuracy,
+      location_address: loc.address,
+      location_source: loc.source,
+      location_confirmed: true,
+      location_timestamp: loc.timestamp ?? now,
+      location_hash: newLocHash,
+      last_action_at: now,
+    });
+    if (updateError) throw updateError;
+
+    const movedM = (oldLoc.lat != null && oldLoc.lng != null)
+      ? Math.round(haversineMeters(oldLoc.lat, oldLoc.lng, loc.lat, loc.lng))
+      : null;
+    const auditNote = JSON.stringify({
+      type: "LOCATION_UPDATED",
+      old: oldLoc,
+      new: { lat: loc.lat, lng: loc.lng, hash: newLocHash },
+      moved_m: movedM,
+      reason: typeof req.body?.reason === "string" ? req.body.reason.slice(0, 500) : null,
+    });
+    const event = await appendStatusEvent({
+      complaintId: complaint.id,
+      fromStatus: complaint.status,
+      toStatus: complaint.status,
+      actorId: req.user.id,
+      actorRole: "authority",
+      note: auditNote,
+      locHash: newLocHash,
+    });
+    anchorInBackground({ event, complaintId: complaint.id, trackingCode: complaint.tracking_code, fromStatus: complaint.status, toStatus: complaint.status });
+
+    res.json({ ok: true, event, moved_m: movedM });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // POST /complaints/:id/proof-of-fix  { photo: { dataUrl, capturedAt } }  (authority action)
 router.post("/:id/proof-of-fix", requireUser, async (req, res) => {
   try {
@@ -319,9 +484,22 @@ router.post("/:id/proof-of-fix", requireUser, async (req, res) => {
       .maybeSingle();
     if (error) throw error;
     if (!complaint) return res.status(404).json({ error: "not found" });
-    const { photo } = req.body;
+    const { photo, resolution } = req.body;
     if (!photo?.dataUrl) return res.status(400).json({ error: "photo required" });
     const now = new Date().toISOString();
+
+    // Optional authority coordinates (browser geolocation, permission-gated).
+    // Supporting evidence only — never treated as absolute proof of repair.
+    let resolutionLoc = null;
+    let proofDistanceM = null;
+    if (resolution && typeof resolution === "object") {
+      const check = validateLocation(resolution, { requireConfirmed: false });
+      if (!check.ok) return res.status(400).json({ error: `Invalid resolution location: ${check.error}` });
+      resolutionLoc = check.clean;
+      if (complaint.lat != null && complaint.lng != null) {
+        proofDistanceM = Math.round(haversineMeters(complaint.lat, complaint.lng, resolutionLoc.lat, resolutionLoc.lng));
+      }
+    }
 
     const { error: evError } = await supabase.from("evidence").insert({
       id: nanoid(),
@@ -330,29 +508,40 @@ router.post("/:id/proof-of-fix", requireUser, async (req, res) => {
       kind: "proof_of_fix",
       photo_ref: photo.dataUrl.slice(0, 64),
       photo_hash: sha256Hex(photo.dataUrl),
-      lat: complaint.lat,
-      lng: complaint.lng,
+      lat: resolutionLoc?.lat ?? complaint.lat,
+      lng: resolutionLoc?.lng ?? complaint.lng,
       captured_at: photo.capturedAt ?? now,
     });
     if (evError) throw evError;
 
-    const { error: updateError } = await supabase
-      .from("complaints")
-      .update({ status: "RESOLVED", resolved_at: now, last_action_at: now })
-      .eq("id", complaint.id);
+    const updateError = await updateComplaintRow(complaint.id, {
+      status: "RESOLVED",
+      resolved_at: now,
+      last_action_at: now,
+      ...(resolutionLoc ? {
+        resolution_lat: resolutionLoc.lat,
+        resolution_lng: resolutionLoc.lng,
+        resolution_location_accuracy: resolutionLoc.accuracy,
+        resolution_timestamp: resolutionLoc.timestamp ?? now,
+        proof_distance_m: proofDistanceM,
+      } : {}),
+    });
     if (updateError) throw updateError;
 
+    const proofNote = proofDistanceM != null
+      ? `Proof of fix uploaded (${formatDistance(proofDistanceM)} from reported location)`
+      : "Proof of fix uploaded";
     const event = await appendStatusEvent({
       complaintId: complaint.id,
       fromStatus: complaint.status,
       toStatus: "RESOLVED",
       actorId: req.user.id,
       actorRole: req.user.role,
-      note: "Proof of fix uploaded",
+      note: proofNote,
     });
     anchorInBackground({ event, complaintId: complaint.id, trackingCode: complaint.tracking_code, fromStatus: complaint.status, toStatus: "RESOLVED" });
 
-    res.json({ ok: true, event });
+    res.json({ ok: true, event, proof_distance_m: proofDistanceM });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

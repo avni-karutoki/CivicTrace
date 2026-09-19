@@ -55,6 +55,18 @@ export interface BackendComplaint {
   description: string | null;
   lat: number;
   lng: number;
+  // Round 3 exact-location fields (absent on pre-migration rows).
+  location_accuracy?: number | null;
+  location_address?: string | null;
+  location_source?: string | null;
+  location_confirmed?: boolean | null;
+  location_timestamp?: string | null;
+  location_hash?: string | null;
+  resolution_lat?: number | null;
+  resolution_lng?: number | null;
+  resolution_location_accuracy?: number | null;
+  resolution_timestamp?: string | null;
+  proof_distance_m?: number | null;
   priority: "normal" | "urgent" | "very_urgent";
   status: "REPORTED" | "ASSESSED" | "IN_PROGRESS" | "RESOLVED" | "DISPUTED";
   department_id: string | null;
@@ -161,8 +173,19 @@ export const api = {
     lng: number;
     priority?: string;
     photo?: { dataUrl: string; capturedAt?: string };
-  }): Promise<{ merged: boolean; dedup_score?: number; distance_m?: number | null; complaint: BackendComplaint; tracking_code?: string }> =>
-    post("/complaints", body),
+    location?: {
+      lat: number; lng: number;
+      accuracy?: number | null; address?: string | null;
+      source?: string; confirmed?: boolean; timestamp?: string | null;
+    };
+  }): Promise<{
+    merged: boolean; dedup_score?: number; distance_m?: number | null;
+    complaint: BackendComplaint; tracking_code?: string;
+    repeat?: {
+      tracking_code: string; status: string; resolved_at: string | null;
+      distance_m: number; proof_available: boolean; confidence: number;
+    } | null;
+  }> => post("/complaints", body),
 
   listComplaints: (params?: { status?: string; department_id?: string }): Promise<BackendComplaint[]> => {
     const q = new URLSearchParams(params as Record<string, string>).toString();
@@ -178,8 +201,11 @@ export const api = {
   updateStatus: (id: string, toStatus: string, note?: string, departmentId?: string) =>
     post(`/complaints/${id}/status`, { toStatus, note, departmentId }),
 
-  proofOfFix: (id: string, photo: { dataUrl: string; capturedAt?: string }) =>
-    post(`/complaints/${id}/proof-of-fix`, { photo }),
+  proofOfFix: (
+    id: string,
+    photo: { dataUrl: string; capturedAt?: string },
+    resolution?: { lat: number; lng: number; accuracy?: number | null; timestamp?: string | null } | null
+  ) => post(`/complaints/${id}/proof-of-fix`, resolution ? { photo, resolution } : { photo }),
 
   acceptFix: (id: string) => post(`/complaints/${id}/accept`, {}),
 
@@ -196,6 +222,10 @@ export const api = {
   departments: (): Promise<BackendDepartment[]> => apiFetch("/departments"),
 
   runEscalation: (): Promise<{ ok: boolean }> => post("/admin/run-escalation", {}),
+
+  /** AI-generate the "Additional Note" text from a complaint photo (still editable). */
+  describePhoto: (body: { photo: { dataUrl: string }; category?: string; categoryLabel?: string }): Promise<{ ok: boolean; description: string }> =>
+    post("/ai/describe-photo", body),
 };
 
 // ─── Display maps (backend values → UI labels) ───

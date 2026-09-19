@@ -1,12 +1,15 @@
 import { useState, useEffect, useRef } from "react";
 import { useCivic, useLiveComplaints, useLiveLeaderboard, useLiveMyComplaints, useLiveNotifications, useLiveVerification } from "./store";
+import type { ReportLocation as DraftLocation } from "./store";
 import { PageTransition, Reveal, AnimatedNumber } from "./motion";
 import { api, CATEGORY_LABELS, PRIORITY_UI, STATUS_UI, timeAgo, daysOpen, toCardComplaint } from "./api/civictrace";
 import { getOnchainStatus } from "./api/onchain";
 import type { BackendComplaint } from "./api/civictrace";
+import mapboxgl from "mapbox-gl";
+import "mapbox-gl/dist/mapbox-gl.css";
 
 // ─── Page Router ─────────────────────────────────────────────────────────────
-type Page = "home" | "auth" | "dashboard" | "report-category" | "report-evidence" | "report-details" | "complaint-submitted" | "my-complaints" | "complaint-detail" | "proof-of-fix" | "civic-map" | "public-record" | "verification" | "leaderboard" | "dept-trust" | "impact-dashboard" | "about" | "how-it-works" | "authority-login" | "authority-dashboard" | "authority-complaint-queue" | "authority-complaint-detail" | "authority-escalations";
+type Page = "home" | "auth" | "dashboard" | "report-category" | "report-evidence" | "report-details" | "report-location" | "complaint-submitted" | "my-complaints" | "complaint-detail" | "proof-of-fix" | "civic-map" | "public-record" | "verification" | "leaderboard" | "dept-trust" | "impact-dashboard" | "about" | "how-it-works" | "authority-login" | "authority-dashboard" | "authority-complaint-queue" | "authority-complaint-detail" | "authority-escalations";
 
 // ─── Civic Illustration (Left Panel) ─────────────────────────────────────────
 function CivicIllustration() {
@@ -582,6 +585,112 @@ function CivicTraceLogo({ size = 36 }: { size?: number }) {
   );
 }
 
+// ─── Wallet (MetaMask) ───────────────────────────────────────────────────────
+interface EthProvider {
+  request: (args: { method: string; params?: unknown }) => Promise<unknown>;
+  on?: (event: string, handler: (...args: unknown[]) => void) => void;
+  removeListener?: (event: string, handler: (...args: unknown[]) => void) => void;
+}
+
+function getEthProvider(): EthProvider | null {
+  if (typeof window === "undefined") return null;
+  const w = window as unknown as { ethereum?: EthProvider };
+  return w.ethereum ?? null;
+}
+
+function useWallet() {
+  const [account, setAccount] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem("civictrace_wallet");
+    } catch {
+      return null;
+    }
+  });
+  const [connecting, setConnecting] = useState(false);
+  const [walletErr, setWalletErr] = useState("");
+  const hasProvider = getEthProvider() !== null;
+
+  // Keep in sync with the extension (account switch / disconnect) + restore session.
+  useEffect(() => {
+    const eth = getEthProvider();
+    if (!eth?.on) return undefined;
+    const handleAccounts = (...args: unknown[]) => {
+      const accs = args[0];
+      const next = Array.isArray(accs) && typeof accs[0] === "string" ? accs[0] : null;
+      setAccount(next);
+      try {
+        if (next) localStorage.setItem("civictrace_wallet", next);
+        else localStorage.removeItem("civictrace_wallet");
+      } catch { /* private mode — session only */ }
+    };
+    eth.on("accountsChanged", handleAccounts);
+    eth.request({ method: "eth_accounts" }).then(v => handleAccounts(v)).catch(() => {});
+    return () => { eth.removeListener?.("accountsChanged", handleAccounts); };
+  }, []);
+
+  async function connect() {
+    const eth = getEthProvider();
+    if (!eth) {
+      window.open("https://metamask.io/download/", "_blank", "noopener");
+      return;
+    }
+    setConnecting(true);
+    setWalletErr("");
+    try {
+      const accs = await eth.request({ method: "eth_requestAccounts" });
+      const next = Array.isArray(accs) && typeof accs[0] === "string" ? accs[0] : null;
+      if (!next) throw new Error("No account returned by wallet.");
+      setAccount(next);
+      try {
+        localStorage.setItem("civictrace_wallet", next);
+      } catch { /* private mode — session only */ }
+    } catch (e) {
+      setWalletErr(e instanceof Error ? e.message : "Wallet connection failed.");
+    } finally {
+      setConnecting(false);
+    }
+  }
+
+  function disconnect() {
+    setAccount(null);
+    try {
+      localStorage.removeItem("civictrace_wallet");
+    } catch { /* ignore */ }
+  }
+
+  return { account, connecting, walletErr, hasProvider, connect, disconnect };
+}
+
+function ConnectWalletButton({ onDone }: { onDone?: () => void }) {
+  const { account, connecting, walletErr, hasProvider, connect, disconnect } = useWallet();
+  const btnStyle: React.CSSProperties = {
+    borderRadius: "1px",
+    fontFamily: "var(--font-mono)", fontSize: "0.7rem", letterSpacing: "0.1em", textTransform: "uppercase",
+  };
+  if (account) {
+    const short = `${account.slice(0, 6)}…${account.slice(-4)}`;
+    return (
+      <button onClick={() => { disconnect(); onDone?.(); }} title={`Connected: ${account} — click to disconnect`}
+        className="px-3 py-2 border flex items-center gap-2 hover:opacity-80 transition-opacity font-mono text-xs tracking-widest uppercase"
+        style={{ ...btnStyle, borderColor: "#4A7C5F", background: "#EEF4F0", color: "#1C0A00" }}>
+        <span className="w-2 h-2 rounded-full" style={{ background: "#4A7C5F" }} />
+        {short}
+      </button>
+    );
+  }
+  return (
+    <button onClick={() => { connect(); onDone?.(); }} disabled={connecting} title={walletErr || (hasProvider ? "Connect with MetaMask" : "Install MetaMask")}
+      className="px-3 py-2 border hover:opacity-80 transition-opacity font-mono text-xs tracking-widest uppercase flex items-center gap-2"
+      style={{ ...btnStyle, borderColor: "#1C0A00", color: "#1C0A00", opacity: connecting ? 0.6 : 1, background: "transparent" }}>
+      <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+        <path d="M6 1 L10.5 3.5 L10.5 8.5 L6 11 L1.5 8.5 L1.5 3.5 Z" stroke="#B8872A" strokeWidth="1.2" fill="none"/>
+        <circle cx="6" cy="6" r="1.4" fill="#B8872A"/>
+      </svg>
+      {connecting ? "Connecting…" : hasProvider ? "Connect Wallet" : "Install MetaMask"}
+    </button>
+  );
+}
+
 // ─── Illustrated Civic Map (SVG) ────────────────────────────────────────────
 function CivicMap({ compact = false }: { compact?: boolean }) {
   const h = compact ? 280 : 380;
@@ -790,6 +899,47 @@ function StatusBadge({ status }: { status: string }) {
     <span className="badge-in font-mono text-xs px-2 py-0.5 border" style={{ background: s.bg, color: s.text, borderColor: s.border, letterSpacing: "0.08em" }}>
       {status}
     </span>
+  );
+}
+
+// ─── Complaint Location Block (Round 3 — public-safe location record) ───────
+// Shows only the issue location + proof distance. Never identity.
+function ComplaintLocationBlock({ complaint }: { complaint: BackendComplaint }) {
+  const rows: [string, string][] = [];
+  if (complaint.location_address) {
+    rows.push(["Reported location", complaint.location_address]);
+  }
+  if (complaint.lat != null && complaint.lng != null) {
+    rows.push(["Coordinates", `${Number(complaint.lat).toFixed(6)}, ${Number(complaint.lng).toFixed(6)}`]);
+  }
+  if (complaint.location_accuracy != null) {
+    rows.push(["GPS accuracy", `± ${Math.round(complaint.location_accuracy)} m`]);
+  }
+  if (complaint.location_source) {
+    const label = complaint.location_source === "gps" ? "GPS detected"
+      : complaint.location_source === "map_search" ? "Map search" : "Manually adjusted";
+    rows.push(["Location source", label]);
+  }
+  if (complaint.proof_distance_m != null) {
+    rows.push(["Proof distance", `Proof submitted ${Math.round(complaint.proof_distance_m)} m from reported location`]);
+  } else if (complaint.status === "RESOLVED") {
+    rows.push(["Proof distance", "No resolution GPS on record"]);
+  }
+  if (!rows.length) {
+    rows.push(["Location", "Location unavailable (reported before GPS capture)"]);
+  }
+  return (
+    <div className="border p-4" style={{ background: "#FAF7F2", borderColor: "#C8B89A", borderRadius: "2px" }}>
+      <div style={{ fontFamily: "var(--font-mono)", fontSize: "0.58rem", letterSpacing: "0.12em", textTransform: "uppercase", color: "#5C4A32", opacity: 0.5, marginBottom: 8 }}>
+        📍 Verified Location Record
+      </div>
+      {rows.map(([label, value]) => (
+        <div key={label} className="flex items-start justify-between gap-3 py-1.5 border-b last:border-0" style={{ borderColor: "#EDE5D4" }}>
+          <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.58rem", color: "#5C4A32", opacity: 0.6 }}>{label}</span>
+          <span style={{ fontFamily: "var(--font-body)", fontSize: "0.78rem", color: "#1C0A00", textAlign: "right" }}>{value}</span>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -1558,7 +1708,7 @@ function CitizenDashboard({ onNavigate }: { onNavigate: (p: Page) => void }) {
 
 // ─── Report Flow: Step Progress Bar ──────────────────────────────────────────
 function ReportProgress({ step }: { step: number }) {
-  const steps = ["Category", "Evidence", "Details", "Submitted"];
+  const steps = ["Category", "Evidence", "Details", "Location", "Submitted"];
   return (
     <div className="flex items-center justify-center gap-0">
       {steps.map((label, i) => {
@@ -2031,6 +2181,10 @@ function ReportEvidencePage({ onBack, onContinue }: { onBack: () => void; onCont
   const [preview, setPreview] = useState<string | null>(null);
   const [note, setNote] = useState("");
   const [captureTimestamp, setCaptureTimestamp] = useState<Date | null>(null);
+  const [aiState, setAiState] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [aiErr, setAiErr] = useState("");
+  const aiReqId = useRef(0);
+  const lastAiText = useRef("");
   const civic = useCivic();
 
   function stopCamera() {
@@ -2070,6 +2224,32 @@ function ReportEvidencePage({ onBack, onContinue }: { onBack: () => void; onCont
     }
   }
 
+  // AI description: fills the Additional Note box from the photo, but never
+  // overwrites text the user typed. `force` is only for the Regenerate button.
+  async function triggerAiDescription(dataUrl: string, force = false) {
+    if (!force && note.trim() !== "") return;
+    const id = ++aiReqId.current;
+    setAiState("loading");
+    setAiErr("");
+    try {
+      const res = await api.describePhoto({
+        photo: { dataUrl },
+        category: civic.draft.category || undefined,
+        categoryLabel: civic.draft.categoryLabel || undefined,
+      });
+      if (aiReqId.current !== id) return;
+      const desc = (res.description || "").trim();
+      if (!desc) throw new Error("Empty description");
+      lastAiText.current = desc;
+      setNote(desc);
+      setAiState("ready");
+    } catch (e) {
+      if (aiReqId.current !== id) return;
+      setAiState("error");
+      setAiErr(e instanceof Error ? e.message : "AI description failed");
+    }
+  }
+
   function capturePhoto() {
     const video = videoRef.current;
     if (!video || !video.videoWidth) return;
@@ -2087,6 +2267,7 @@ function ReportEvidencePage({ onBack, onContinue }: { onBack: () => void; onCont
     civic.setDraft({ photoDataUrl: dataUrl, photoNote: `Captured at ${now.toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}` });
     setCaptured(true);
     stopCamera();
+    triggerAiDescription(dataUrl);
   }
 
   function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
@@ -2103,6 +2284,7 @@ function ReportEvidencePage({ onBack, onContinue }: { onBack: () => void; onCont
         setPreview(dataUrl);
         setCaptureTimestamp(now);
         civic.setDraft({ photoDataUrl: dataUrl, photoNote: `Uploaded at ${now.toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}` });
+        triggerAiDescription(dataUrl);
       }, 800);
     };
     reader.readAsDataURL(file);
@@ -2304,7 +2486,7 @@ function ReportEvidencePage({ onBack, onContinue }: { onBack: () => void; onCont
                 </div>
 
                 <div className="flex gap-3 mb-4">
-                  <button onClick={() => { stopCamera(); setCaptured(false); setPreview(null); setMethod(null); setCamErr(""); setCaptureTimestamp(null); civic.setDraft({ photoDataUrl: null }); }}
+                  <button onClick={() => { aiReqId.current++; setAiState("idle"); setAiErr(""); if (note === lastAiText.current) { setNote(""); lastAiText.current = ""; } stopCamera(); setCaptured(false); setPreview(null); setMethod(null); setCamErr(""); setCaptureTimestamp(null); civic.setDraft({ photoDataUrl: null }); }}
                     className="flex items-center gap-1.5 px-4 py-2.5 border hover:bg-[#EDE5D4] transition-colors"
                     style={{ borderColor: "#C8B89A", color: "#5C4A32", borderRadius: "1px",
                       fontFamily: "var(--font-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", textTransform: "uppercase" }}>
@@ -2330,16 +2512,41 @@ function ReportEvidencePage({ onBack, onContinue }: { onBack: () => void; onCont
 
             {/* Additional note */}
             <div className="mt-4">
-              <div style={{ fontFamily: "var(--font-mono)", fontSize: "0.58rem", letterSpacing: "0.1em", textTransform: "uppercase", color: "#5C4A32", opacity: 0.5, marginBottom: 6 }}>
-                Additional Note <span style={{ opacity: 0.5 }}>(Optional)</span>
+              <div className="flex items-center justify-between" style={{ marginBottom: 6 }}>
+                <div style={{ fontFamily: "var(--font-mono)", fontSize: "0.58rem", letterSpacing: "0.1em", textTransform: "uppercase", color: "#5C4A32", opacity: 0.5 }}>
+                  Additional Note <span style={{ opacity: 0.5 }}>(Optional)</span>
+                </div>
+                {(aiState === "ready" || aiState === "error") && (preview || civic.draft.photoDataUrl) && (
+                  <button
+                    onClick={() => triggerAiDescription(civic.draft.photoDataUrl ?? preview ?? "", true)}
+                    className="hover:opacity-70 transition-opacity"
+                    style={{ fontFamily: "var(--font-mono)", fontSize: "0.58rem", letterSpacing: "0.06em", color: "#3A6B9B", opacity: 0.9 }}>
+                    ✨ Regenerate with AI
+                  </button>
+                )}
               </div>
               <textarea rows={3} value={note} onChange={e => setNote(e.target.value)}
                 placeholder="Describe the issue in a few words — e.g. 'Large pothole causing vehicle damage near junction.'"
                 style={{
-                  width: "100%", padding: "10px 14px", border: "1px solid #C8B89A", borderRadius: "1px",
+                  width: "100%", padding: "10px 14px", border: aiState === "loading" ? "1px solid #3A6B9B" : "1px solid #C8B89A", borderRadius: "1px",
                   background: "#FAF7F2", color: "#1C0A00", fontFamily: "var(--font-body)", fontSize: "0.85rem",
                   resize: "vertical", outline: "none", lineHeight: 1.55,
                 }}/>
+              {aiState === "loading" && (
+                <div style={{ fontFamily: "var(--font-mono)", fontSize: "0.58rem", color: "#3A6B9B", marginTop: 6 }}>
+                  ✨ AI is describing your photo…
+                </div>
+              )}
+              {aiState === "ready" && (
+                <div style={{ fontFamily: "var(--font-mono)", fontSize: "0.58rem", color: "#4A7C5F", marginTop: 6 }}>
+                  ✨ AI-generated from your photo — edit freely.
+                </div>
+              )}
+              {aiState === "error" && (
+                <div style={{ fontFamily: "var(--font-mono)", fontSize: "0.58rem", color: "#5C4A32", opacity: 0.7, marginTop: 6 }}>
+                  AI description unavailable{aiErr ? ` (${aiErr.slice(0, 120)})` : ""} — please type the note yourself.
+                </div>
+              )}
             </div>
           </div>
 
@@ -2474,22 +2681,12 @@ function ReportDetailsPage({ onBack, onContinue }: { onBack: () => void; onConti
 
   const canContinue = summary.trim().length > 0 && photoTaken;
   const civic = useCivic();
-  const [submitting, setSubmitting] = useState(false);
-  const [submitErr, setSubmitErr] = useState("");
 
-  async function handleSubmit() {
-    if (!canContinue || submitting) return;
-    setSubmitting(true);
-    setSubmitErr("");
+  // Round 3: details no longer submits — it saves to the draft and advances
+  // to the Complaint Location step, which confirms location then submits.
+  function handleContinue() {
+    if (!canContinue) return;
     civic.setDraft({ summary: summary.trim(), description: description.trim() });
-    // Submit against the live backend. Only advance on success — a failed save
-    // stays on this page with the error shown, and never shows a demo code.
-    const result = await civic.submitReport().catch(() => null);
-    setSubmitting(false);
-    if (!result || !result.ok) {
-      setSubmitErr(result?.error || "Could not save your report. Check your connection and try again.");
-      return;
-    }
     onContinue();
   }
 
@@ -2960,31 +3157,24 @@ function ReportDetailsPage({ onBack, onContinue }: { onBack: () => void; onConti
             Back
           </button>
           <div className="flex items-center gap-3">
-            {!canContinue && !submitErr && (
+            {!canContinue && (
               <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.57rem", color: "#5C4A32", opacity: 0.45 }}>
                 {!summary.trim() ? "Add an issue summary" : "Capture verification photo"}
               </span>
             )}
-            {submitErr && (
-              <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.57rem", color: "#9B3A3A" }}>
-                {submitErr}
-              </span>
-            )}
-            <button onClick={canContinue && !submitting ? handleSubmit : undefined}
+            <button onClick={canContinue ? handleContinue : undefined}
               className="flex items-center gap-2 px-6 py-3"
               style={{
                 background: canContinue ? "#1C0A00" : "#C8B89A",
                 color: canContinue ? "#F5F0E8" : "#FAF7F2",
-                borderRadius: "1px", cursor: canContinue && !submitting ? "pointer" : "default",
+                borderRadius: "1px", cursor: canContinue ? "pointer" : "default",
                 fontFamily: "var(--font-mono)", fontSize: "0.62rem", letterSpacing: "0.12em", textTransform: "uppercase",
                 opacity: canContinue ? 1 : 0.5, transition: "all 0.2s ease",
               }}>
-              {submitting ? "Saving…" : "Review & Submit"}
-              {!submitting && (
+              Continue to Location
               <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
                 <path d="M4 2 L8 6 L4 10" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
               </svg>
-              )}
             </button>
           </div>
         </div>
@@ -3034,6 +3224,530 @@ function ReportDetailsPage({ onBack, onContinue }: { onBack: () => void; onConti
   );
 }
 
+// ─── PAGE 07b — Report: Complaint Location (Mapbox exact-location step) ──────
+// Round 3 flow: Detect (GPS) → adjust on map (drag/search) → confirm → submit.
+// A complaint can never be submitted without a confirmed location.
+const MAPBOX_TOKEN = (import.meta.env.VITE_MAPBOX_TOKEN as string | undefined)?.trim() || "";
+const FALLBACK_CENTER = { lat: 28.6139, lng: 77.209 }; // New Delhi
+const LOW_ACCURACY_M = 50;
+
+interface GeocodeFeature {
+  place_name: string;
+  center: [number, number];
+}
+
+async function mapboxReverseGeocode(lat: number, lng: number): Promise<string | null> {
+  if (!MAPBOX_TOKEN) return null;
+  const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${lng},${lat}.json?access_token=${encodeURIComponent(MAPBOX_TOKEN)}&limit=1`;
+  const r = await fetch(url);
+  if (!r.ok) throw new Error("Reverse-geocoding failed");
+  const j = (await r.json()) as { features?: GeocodeFeature[] };
+  return j.features?.[0]?.place_name ?? null;
+}
+
+async function mapboxForwardGeocode(query: string): Promise<GeocodeFeature[]> {
+  const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(query)}.json?access_token=${encodeURIComponent(MAPBOX_TOKEN)}&limit=5&country=in`;
+  const r = await fetch(url);
+  if (!r.ok) throw new Error("Search failed");
+  const j = (await r.json()) as { features?: GeocodeFeature[] };
+  return j.features ?? [];
+}
+
+const SOURCE_LABEL: Record<DraftLocation["source"], string> = {
+  gps: "GPS detected",
+  map_search: "Map search",
+  manual_adjustment: "Manually adjusted",
+};
+
+function ReportLocationPage({ onBack, onContinue }: { onBack: () => void; onContinue: () => void }) {
+  const civic = useCivic();
+  const mapElRef = useRef<HTMLDivElement | null>(null);
+  const mapRef = useRef<mapboxgl.Map | null>(null);
+  const markerRef = useRef<mapboxgl.Marker | null>(null);
+  const searchTimer = useRef<number | null>(null);
+
+  const restored = civic.draft.location;
+  const [pos, setPos] = useState<{ lat: number; lng: number } | null>(
+    restored ? { lat: restored.lat, lng: restored.lng } : null
+  );
+  const [accuracy, setAccuracy] = useState<number | null>(restored?.accuracy ?? null);
+  const [address, setAddress] = useState<string | null>(restored?.address ?? null);
+  const [addrLoading, setAddrLoading] = useState(false);
+  const [source, setSource] = useState<DraftLocation["source"]>(restored?.source ?? "gps");
+  const [locState, setLocState] = useState<"idle" | "detecting" | "detected" | "denied" | "unavailable">(
+    restored ? "detected" : "idle"
+  );
+  const [mapError, setMapError] = useState("");
+  const [confirmed, setConfirmed] = useState(restored?.confirmed ?? false);
+  const [search, setSearch] = useState("");
+  const [results, setResults] = useState<GeocodeFeature[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [satView, setSatView] = useState(false);
+  const [manualLat, setManualLat] = useState(restored ? String(restored.lat) : "");
+  const [manualLng, setManualLng] = useState(restored ? String(restored.lng) : "");
+  const [manualErr, setManualErr] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [submitErr, setSubmitErr] = useState("");
+
+  const hasMap = Boolean(MAPBOX_TOKEN) && !mapError;
+
+  // ── Map lifecycle ──
+  useEffect(() => {
+    if (!MAPBOX_TOKEN || !mapElRef.current || mapRef.current) return;
+    let cancelled = false;
+    try {
+      mapboxgl.accessToken = MAPBOX_TOKEN;
+      const start = pos ?? (civic.draft.lat != null && civic.draft.lng != null
+        ? { lat: civic.draft.lat, lng: civic.draft.lng }
+        : FALLBACK_CENTER);
+      const map = new mapboxgl.Map({
+        container: mapElRef.current,
+        style: "mapbox://styles/mapbox/streets-v12",
+        center: [start.lng, start.lat],
+        zoom: pos ? 16 : 11,
+      });
+      map.addControl(new mapboxgl.NavigationControl({ showCompass: false }), "top-right");
+      map.on("error", () => {
+        if (!cancelled) setMapError("Map service temporarily unavailable. Use manual coordinates below.");
+      });
+      mapRef.current = map;
+      if (pos) placeMarkerRef.current?.(pos.lng, pos.lat, false);
+    } catch {
+      if (!cancelled) setMapError("Map service temporarily unavailable. Use manual coordinates below.");
+    }
+    return () => {
+      cancelled = true;
+      markerRef.current?.remove();
+      markerRef.current = null;
+      mapRef.current?.remove();
+      mapRef.current = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Satellite / streets toggle.
+  useEffect(() => {
+    mapRef.current?.setStyle(satView ? "mapbox://styles/mapbox/satellite-v9" : "mapbox://styles/mapbox/streets-v12");
+  }, [satView]);
+
+  async function reverse(lat: number, lng: number) {
+    setAddrLoading(true);
+    try {
+      const a = await mapboxReverseGeocode(lat, lng);
+      setAddress(a);
+    } catch {
+      setAddress(null);
+    } finally {
+      setAddrLoading(false);
+    }
+  }
+
+  function placeMarker(lng: number, lat: number, fly: boolean) {
+    const map = mapRef.current;
+    if (!map) return;
+    if (!markerRef.current) {
+      const m = new mapboxgl.Marker({ color: "#9B3A3A", draggable: true });
+      m.on("dragend", () => {
+        const ll = m.getLngLat();
+        applyPosition(ll.lat, ll.lng, "manual_adjustment", null);
+      });
+      m.addTo(map);
+      markerRef.current = m;
+    }
+    markerRef.current.setLngLat([lng, lat]);
+    if (fly) map.flyTo({ center: [lng, lat], zoom: 16, duration: 1200 });
+  }
+  const placeMarkerRef = useRef(placeMarker);
+  placeMarkerRef.current = placeMarker;
+
+  function applyPosition(lat: number, lng: number, src: DraftLocation["source"], acc: number | null) {
+    setPos({ lat, lng });
+    setSource(src);
+    setAccuracy(acc);
+    setConfirmed(false);
+    setLocState("detected");
+    setAddress(null);
+    if (mapRef.current) {
+      placeMarker(lng, lat, src !== "manual_adjustment");
+      reverse(lat, lng);
+    } else {
+      reverse(lat, lng);
+    }
+  }
+
+  function detectLocation() {
+    setSubmitErr("");
+    if (!("geolocation" in navigator)) {
+      setLocState("unavailable");
+      return;
+    }
+    setLocState("detecting");
+    navigator.geolocation.getCurrentPosition(
+      (p) => {
+        const acc = p.coords.accuracy != null && Number.isFinite(p.coords.accuracy) ? Math.round(p.coords.accuracy) : null;
+        applyPosition(p.coords.latitude, p.coords.longitude, "gps", acc);
+      },
+      (err) => {
+        if (err.code === err.PERMISSION_DENIED) setLocState("denied");
+        else setLocState("unavailable");
+      },
+      { enableHighAccuracy: true, timeout: 12000, maximumAge: 60000 }
+    );
+  }
+
+  function onSearchChange(v: string) {
+    setSearch(v);
+    if (searchTimer.current) window.clearTimeout(searchTimer.current);
+    if (v.trim().length < 3 || !MAPBOX_TOKEN) {
+      setResults([]);
+      setSearching(false);
+      return;
+    }
+    setSearching(true);
+    searchTimer.current = window.setTimeout(async () => {
+      try {
+        setResults(await mapboxForwardGeocode(v.trim()));
+      } catch {
+        setResults([]);
+      } finally {
+        setSearching(false);
+      }
+    }, 400);
+  }
+
+  function pickSearchResult(f: GeocodeFeature) {
+    const [lng, lat] = f.center;
+    setResults([]);
+    setSearch(f.place_name);
+    setAddress(f.place_name);
+    setPos({ lat, lng });
+    setSource("map_search");
+    setAccuracy(null);
+    setConfirmed(false);
+    setLocState("detected");
+    if (mapRef.current) {
+      placeMarker(lng, lat, true);
+      reverse(lat, lng);
+    }
+  }
+
+  function confirmManual() {
+    setManualErr("");
+    setSubmitErr("");
+    const lat = Number(manualLat);
+    const lng = Number(manualLng);
+    if (!Number.isFinite(lat) || lat < -90 || lat > 90) {
+      setManualErr("Latitude must be a number between -90 and 90.");
+      return;
+    }
+    if (!Number.isFinite(lng) || lng < -180 || lng > 180) {
+      setManualErr("Longitude must be a number between -180 and 180.");
+      return;
+    }
+    applyPosition(lat, lng, "manual_adjustment", null);
+    if (!MAPBOX_TOKEN) setAddress("Manual coordinates (reverse-geocode needs a Mapbox token)");
+  }
+
+  function confirmLocation() {
+    if (!pos) return;
+    const loc: DraftLocation = {
+      lat: pos.lat,
+      lng: pos.lng,
+      accuracy,
+      address,
+      source,
+      confirmed: true,
+      timestamp: new Date().toISOString(),
+    };
+    civic.setDraft({ location: loc, lat: pos.lat, lng: pos.lng });
+    setConfirmed(true);
+  }
+
+  async function handleSubmit() {
+    if (!confirmed || submitting) return;
+    setSubmitting(true);
+    setSubmitErr("");
+    const result = await civic.submitReport().catch(() => null);
+    setSubmitting(false);
+    if (!result || !result.ok) {
+      setSubmitErr(result?.error || "Could not save your report. Check your connection and try again.");
+      return;
+    }
+    onContinue();
+  }
+
+  const statusLine = !pos && locState === "idle"
+    ? "Location not selected"
+    : locState === "detecting"
+      ? "Detecting location…"
+      : locState === "denied"
+        ? "Location permission denied."
+        : locState === "unavailable"
+          ? "Unable to detect your current location."
+          : confirmed
+            ? "Location confirmed"
+            : "Location detected";
+
+  const lowAccuracy = accuracy != null && accuracy > LOW_ACCURACY_M && !confirmed;
+
+  const inputBase: React.CSSProperties = {
+    width: "100%", padding: "10px 14px",
+    border: "1px solid #C8B89A", borderRadius: "1px",
+    background: "#FAF7F2", color: "#1C0A00",
+    fontFamily: "var(--font-body)", fontSize: "0.875rem", outline: "none",
+  };
+
+  return (
+    <div style={{ background: "#F5F0E8", minHeight: "100vh", fontFamily: "var(--font-body)", paddingBottom: 100 }}>
+      {/* ── Top bar ── */}
+      <div className="sticky top-0 z-40 border-b" style={{ background: "rgba(245,240,232,0.97)", borderColor: "#C8B89A", backdropFilter: "blur(8px)" }}>
+        <div className="max-w-5xl mx-auto px-6 h-14 flex items-center justify-between">
+          <button onClick={onBack} className="flex items-center gap-2 hover:opacity-60 transition-opacity"
+            style={{ fontFamily: "var(--font-mono)", fontSize: "0.6rem", letterSpacing: "0.1em", textTransform: "uppercase", color: "#5C4A32" }}>
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+              <path d="M9 2 L4 7 L9 12" stroke="#5C4A32" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+            Back
+          </button>
+          <div className="flex items-center gap-2">
+            <CivicTraceLogo size={22}/>
+            <span style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: "0.9rem", color: "#1C0A00" }}>CivicTrace</span>
+          </div>
+          <div className="hidden md:block"><ReportProgress step={4}/></div>
+        </div>
+      </div>
+
+      <div className="max-w-5xl mx-auto px-6 py-8">
+        <div style={{ fontFamily: "var(--font-mono)", fontSize: "0.55rem", letterSpacing: "0.16em", textTransform: "uppercase", color: "#5C4A32", opacity: 0.45, marginBottom: 6 }}>
+          Citizen Report · Step 4 of 5
+        </div>
+        <h1 style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontStyle: "italic", fontSize: "clamp(1.5rem, 3vw, 2.1rem)", color: "#1C0A00", lineHeight: 1.15, marginBottom: 6 }}>
+          Confirm Complaint Location
+        </h1>
+        <p style={{ fontFamily: "var(--font-body)", fontSize: "0.88rem", color: "#5C4A32", opacity: 0.7, marginBottom: 20 }}>
+          {civic.draft.categoryLabel || "Your complaint"} — pin its exact location so duplicates and repeats can be verified on record.
+        </p>
+
+        <div className="grid lg:grid-cols-[1fr_340px] gap-8 items-start">
+          {/* LEFT — map + search */}
+          <div>
+            <div className="flex flex-col sm:flex-row gap-2 mb-3">
+              <button onClick={detectLocation} disabled={locState === "detecting"}
+                className="flex items-center justify-center gap-2 px-5 py-3 transition-opacity"
+                style={{ background: "#1C0A00", color: "#F5F0E8", borderRadius: "1px", opacity: locState === "detecting" ? 0.6 : 1,
+                  fontFamily: "var(--font-mono)", fontSize: "0.62rem", letterSpacing: "0.1em", textTransform: "uppercase" }}>
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                  <circle cx="6" cy="6" r="2" fill="#9B3A3A"/>
+                  <path d="M6 0.5 L6 3 M6 9 L6 11.5 M0.5 6 L3 6 M9 6 L11.5 6" stroke="#F5F0E8" strokeWidth="1.2" strokeLinecap="round"/>
+                </svg>
+                {locState === "detecting" ? "Detecting…" : "Detect My Location"}
+              </button>
+              <div className="relative flex-1">
+                <input value={search} onChange={e => onSearchChange(e.target.value)}
+                  placeholder={hasMap ? "Search location — e.g. MG Road, Bengaluru" : "Search needs a Mapbox token"}
+                  disabled={!hasMap}
+                  style={{ ...inputBase, opacity: hasMap ? 1 : 0.5 }}/>
+                {searching && (
+                  <span className="absolute right-3 top-1/2 -translate-y-1/2"
+                    style={{ fontFamily: "var(--font-mono)", fontSize: "0.55rem", color: "#5C4A32", opacity: 0.5 }}>…</span>
+                )}
+                {results.length > 0 && (
+                  <div className="absolute left-0 right-0 top-full mt-1 z-20 border max-h-56 overflow-auto"
+                    style={{ background: "#FAF7F2", borderColor: "#C8B89A", borderRadius: "1px" }}>
+                    {results.map((f, i) => (
+                      <button key={i} onClick={() => pickSearchResult(f)}
+                        className="block w-full text-left px-3 py-2 hover:bg-[#EDE5D4] transition-colors border-b last:border-0"
+                        style={{ borderColor: "#EDE5D4", fontFamily: "var(--font-body)", fontSize: "0.8rem", color: "#1C0A00" }}>
+                        {f.place_name}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {hasMap ? (
+              <div className="relative border overflow-hidden" style={{ borderColor: "#C8B89A", borderRadius: "2px" }}>
+                <div ref={mapElRef} style={{ width: "100%", height: 380 }}/>
+                <div className="absolute top-3 left-3 flex gap-2">
+                  <button onClick={() => setSatView(v => !v)}
+                    className="px-3 py-1.5 border transition-colors hover:bg-[#EDE5D4]"
+                    style={{ background: "rgba(250,247,242,0.95)", borderColor: "#C8B89A", borderRadius: "1px",
+                      fontFamily: "var(--font-mono)", fontSize: "0.55rem", letterSpacing: "0.08em", textTransform: "uppercase", color: "#1C0A00" }}>
+                    {satView ? "Map" : "Satellite"}
+                  </button>
+                </div>
+                <div className="absolute bottom-3 left-3 px-2.5 py-1.5 border"
+                  style={{ background: "rgba(250,247,242,0.95)", borderColor: "#C8B89A", borderRadius: "1px",
+                    fontFamily: "var(--font-mono)", fontSize: "0.55rem", color: "#5C4A32" }}>
+                  Drag the pin to adjust · scroll to zoom
+                </div>
+              </div>
+            ) : (
+              <div className="border p-5" style={{ background: "#FAF7F2", borderColor: "#C8B89A", borderRadius: "2px" }}>
+                <div style={{ fontFamily: "var(--font-mono)", fontSize: "0.6rem", letterSpacing: "0.1em", textTransform: "uppercase", color: "#B8872A", marginBottom: 8 }}>
+                  {MAPBOX_TOKEN ? mapError || "Map unavailable" : "Interactive map needs a Mapbox token"}
+                </div>
+                <p style={{ fontFamily: "var(--font-body)", fontSize: "0.82rem", color: "#5C4A32", lineHeight: 1.6, marginBottom: 12 }}>
+                  {MAPBOX_TOKEN
+                    ? "Map service temporarily unavailable. Enter coordinates manually — your complaint stays fully verifiable."
+                    : "Add VITE_MAPBOX_TOKEN to frontend/.env and restart the dev server for the interactive map. Meanwhile, enter coordinates manually."}
+                </p>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label style={{ display: "block", fontFamily: "var(--font-mono)", fontSize: "0.58rem", letterSpacing: "0.1em", textTransform: "uppercase", color: "#5C4A32", opacity: 0.6, marginBottom: 4 }}>Latitude</label>
+                    <input value={manualLat} onChange={e => setManualLat(e.target.value)} placeholder="12.9716" style={inputBase}/>
+                  </div>
+                  <div>
+                    <label style={{ display: "block", fontFamily: "var(--font-mono)", fontSize: "0.58rem", letterSpacing: "0.1em", textTransform: "uppercase", color: "#5C4A32", opacity: 0.6, marginBottom: 4 }}>Longitude</label>
+                    <input value={manualLng} onChange={e => setManualLng(e.target.value)} placeholder="77.5946" style={inputBase}/>
+                  </div>
+                </div>
+                {manualErr && (
+                  <div style={{ fontFamily: "var(--font-mono)", fontSize: "0.6rem", color: "#9B3A3A", marginTop: 8 }}>{manualErr}</div>
+                )}
+                <button onClick={confirmManual} className="mt-3 px-5 py-2.5 border hover:bg-[#EDE5D4] transition-colors"
+                  style={{ borderColor: "#1C0A00", color: "#1C0A00", borderRadius: "1px",
+                    fontFamily: "var(--font-mono)", fontSize: "0.6rem", letterSpacing: "0.1em", textTransform: "uppercase" }}>
+                  Use These Coordinates
+                </button>
+              </div>
+            )}
+
+            {/* Status + warnings */}
+            <div className="mt-4 space-y-2">
+              <div className="flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full"
+                  style={{ background: confirmed ? "#4A7C5F" : pos ? "#3A6B9B" : "#C8B89A" }}/>
+                <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.62rem", letterSpacing: "0.06em", color: "#1C0A00" }}>
+                  {confirmed ? "✓ Location verified" : `📍 ${statusLine}`}
+                </span>
+              </div>
+              {lowAccuracy && (
+                <div className="p-3 border" style={{ borderColor: "#B8872A", background: "#FBF6EB", borderRadius: "1px",
+                  fontFamily: "var(--font-body)", fontSize: "0.78rem", color: "#5C4A32", lineHeight: 1.55 }}>
+                  Your detected location has low accuracy (±{accuracy} m). Please adjust the marker before continuing.
+                </div>
+              )}
+              {locState === "denied" && (
+                <div className="p-3 border" style={{ borderColor: "#C8B89A", background: "#F0E8D8", borderRadius: "1px",
+                  fontFamily: "var(--font-body)", fontSize: "0.78rem", color: "#5C4A32", lineHeight: 1.55 }}>
+                  Location permission denied. You can manually select your complaint location on the map.
+                </div>
+              )}
+              {locState === "unavailable" && (
+                <div className="p-3 border" style={{ borderColor: "#C8B89A", background: "#F0E8D8", borderRadius: "1px",
+                  fontFamily: "var(--font-body)", fontSize: "0.78rem", color: "#5C4A32", lineHeight: 1.55 }}>
+                  Unable to detect your current location. Search above or drag the pin manually.
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* RIGHT — confirmed location card */}
+          <div className="space-y-4">
+            <div className="border p-5" style={{ background: "#FAF7F2", borderColor: "#C8B89A", borderRadius: "2px" }}>
+              <div style={{ fontFamily: "var(--font-mono)", fontSize: "0.58rem", letterSpacing: "0.12em", textTransform: "uppercase", color: "#5C4A32", opacity: 0.5, marginBottom: 12 }}>
+                Complaint Location
+              </div>
+              {pos ? (
+                <div className="space-y-3">
+                  <div>
+                    <div style={{ fontFamily: "var(--font-mono)", fontSize: "0.55rem", letterSpacing: "0.1em", textTransform: "uppercase", color: "#5C4A32", opacity: 0.5 }}>Address</div>
+                    <div style={{ fontFamily: "var(--font-body)", fontSize: "0.85rem", color: "#1C0A00", lineHeight: 1.5 }}>
+                      {addrLoading ? "Resolving address…" : address || "Address unavailable"}
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontFamily: "var(--font-mono)", fontSize: "0.55rem", letterSpacing: "0.1em", textTransform: "uppercase", color: "#5C4A32", opacity: 0.5 }}>Coordinates</div>
+                    <div style={{ fontFamily: "var(--font-mono)", fontSize: "0.8rem", color: "#1C0A00" }}>
+                      {pos.lat.toFixed(6)}, {pos.lng.toFixed(6)}
+                    </div>
+                  </div>
+                  <div className="flex gap-6">
+                    <div>
+                      <div style={{ fontFamily: "var(--font-mono)", fontSize: "0.55rem", letterSpacing: "0.1em", textTransform: "uppercase", color: "#5C4A32", opacity: 0.5 }}>Accuracy</div>
+                      <div style={{ fontFamily: "var(--font-mono)", fontSize: "0.8rem", color: "#1C0A00" }}>
+                        {accuracy != null ? `± ${accuracy} m` : "—"}
+                      </div>
+                    </div>
+                    <div>
+                      <div style={{ fontFamily: "var(--font-mono)", fontSize: "0.55rem", letterSpacing: "0.1em", textTransform: "uppercase", color: "#5C4A32", opacity: 0.5 }}>Source</div>
+                      <div style={{ fontFamily: "var(--font-mono)", fontSize: "0.7rem", color: "#3A6B9B" }}>{SOURCE_LABEL[source]}</div>
+                    </div>
+                  </div>
+                  {!confirmed ? (
+                    <button onClick={confirmLocation} className="w-full py-3 transition-opacity hover:opacity-90"
+                      style={{ background: "#1C0A00", color: "#F5F0E8", borderRadius: "1px",
+                        fontFamily: "var(--font-mono)", fontSize: "0.62rem", letterSpacing: "0.12em", textTransform: "uppercase" }}>
+                      Confirm Location
+                    </button>
+                  ) : (
+                    <div className="p-3 border text-center" style={{ borderColor: "#4A7C5F", background: "#EEF4F0", borderRadius: "1px",
+                      fontFamily: "var(--font-mono)", fontSize: "0.62rem", letterSpacing: "0.08em", color: "#4A7C5F" }}>
+                      ✓ LOCATION CONFIRMED
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <p style={{ fontFamily: "var(--font-body)", fontSize: "0.82rem", color: "#5C4A32", opacity: 0.7, lineHeight: 1.6 }}>
+                  Detect your location, search, or place the pin — then confirm to continue.
+                </p>
+              )}
+            </div>
+
+            <div className="p-4 border flex gap-3" style={{ borderColor: "#C8B89A", background: "#F0E8D8", borderRadius: "1px" }}>
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" className="flex-shrink-0 mt-0.5">
+                <path d="M8 1.5 L13.5 4 L13.5 8 C13.5 11.5 8 14.5 8 14.5 C8 14.5 2.5 11.5 2.5 8 L2.5 4 Z" stroke="#5C4A32" strokeWidth="1" fill="none" opacity="0.6"/>
+                <path d="M8 4.5 L8 8 M8 10.2 L8 10.3" stroke="#5C4A32" strokeWidth="1.4" strokeLinecap="round" opacity="0.7"/>
+              </svg>
+              <p style={{ fontFamily: "var(--font-body)", fontSize: "0.75rem", color: "#5C4A32", lineHeight: 1.6, opacity: 0.85 }}>
+                This exact location becomes part of your tamper-evident complaint record and powers duplicate detection. Only the issue location is public — never your identity.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* Bottom actions */}
+        <div className="flex items-center justify-between pt-7 mt-6 border-t" style={{ borderColor: "#C8B89A" }}>
+          <button onClick={onBack}
+            className="flex items-center gap-2 px-5 py-3 border hover:bg-[#EDE5D4] transition-colors"
+            style={{ borderColor: "#C8B89A", color: "#5C4A32", borderRadius: "1px",
+              fontFamily: "var(--font-mono)", fontSize: "0.62rem", letterSpacing: "0.1em", textTransform: "uppercase" }}>
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+              <path d="M8 2 L4 6 L8 10" stroke="#5C4A32" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+            Back
+          </button>
+          <div className="flex items-center gap-3">
+            {submitErr && (
+              <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.57rem", color: "#9B3A3A", maxWidth: 260, textAlign: "right" }}>
+                {submitErr}
+              </span>
+            )}
+            {!confirmed && !submitErr && (
+              <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.57rem", color: "#5C4A32", opacity: 0.45 }}>
+                Confirm the location to submit
+              </span>
+            )}
+            <button onClick={confirmed && !submitting ? handleSubmit : undefined}
+              className="flex items-center gap-2 px-6 py-3"
+              style={{
+                background: confirmed ? "#1C0A00" : "#C8B89A",
+                color: confirmed ? "#F5F0E8" : "#FAF7F2",
+                borderRadius: "1px", cursor: confirmed && !submitting ? "pointer" : "default",
+                fontFamily: "var(--font-mono)", fontSize: "0.62rem", letterSpacing: "0.12em", textTransform: "uppercase",
+                opacity: confirmed ? 1 : 0.5, transition: "all 0.2s ease",
+              }}>
+              {submitting ? "Submitting…" : "Submit Complaint"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── PAGE 08 — Complaint Submitted ───────────────────────────────────────────
 function ComplaintSubmittedPage({ onNavigate }: { onNavigate: (p: Page) => void }) {
   const [copied, setCopied] = useState(false);
@@ -3077,7 +3791,7 @@ function ComplaintSubmittedPage({ onNavigate }: { onNavigate: (p: Page) => void 
               {result?.error || "Nothing was saved. Go back, check your connection, and submit again — your details are kept."}
             </p>
             <div className="flex items-center justify-center gap-3">
-              <button onClick={() => onNavigate("report-details")} className="px-6 py-3" style={{ background: "#1C0A00", color: "#F5F0E8", borderRadius: "1px", fontFamily: "var(--font-mono)", fontSize: "0.62rem", letterSpacing: "0.12em", textTransform: "uppercase" }}>
+              <button onClick={() => onNavigate("report-location")} className="px-6 py-3" style={{ background: "#1C0A00", color: "#F5F0E8", borderRadius: "1px", fontFamily: "var(--font-mono)", fontSize: "0.62rem", letterSpacing: "0.12em", textTransform: "uppercase" }}>
                 Try Again
               </button>
               <button onClick={() => onNavigate("dashboard")} className="px-6 py-3 border" style={{ borderColor: "#C8B89A", color: "#5C4A32", borderRadius: "1px", fontFamily: "var(--font-mono)", fontSize: "0.62rem", letterSpacing: "0.12em", textTransform: "uppercase" }}>
@@ -3114,7 +3828,7 @@ function ComplaintSubmittedPage({ onNavigate }: { onNavigate: (p: Page) => void 
     { label: "Issue",     value: civic.draft.summary || "Major Pothole",              valueStyle: {} },
     { label: "Category",  value: civic.draft.categoryLabel || "Roads & Infrastructure",     valueStyle: {} },
     { label: "Priority",  value: civic.draft.priorityLabel?.toUpperCase() || "URGENT",                     valueStyle: { color: "#C4622D", fontFamily: "var(--font-mono)", fontSize: "0.7rem", letterSpacing: "0.08em" } },
-    { label: "Location",  value: "Sector X, New Delhi",        valueStyle: {} },
+    { label: "Location",  value: civic.draft.location?.address || (civic.draft.location ? `${civic.draft.location.lat.toFixed(4)}, ${civic.draft.location.lng.toFixed(4)}` : "Location unavailable"), valueStyle: {} },
     { label: "Submitted", value: now.toLocaleString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" }).replace(",", " ·") + " IST",   valueStyle: { fontFamily: "var(--font-mono)", fontSize: "0.74rem" } },
   ];
 
@@ -3202,6 +3916,34 @@ function ComplaintSubmittedPage({ onNavigate }: { onNavigate: (p: Page) => void 
             <div style={{ fontFamily: "var(--font-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", textTransform: "uppercase", color: "#B8872A" }}>
               Duplicate merged — support count increased
             </div>
+          </div>
+        )}
+        {/* Round 3: possible recurring issue at this location (evidence, not accusation) */}
+        {result?.repeat && (
+          <div className="border mb-5 p-5" style={{ background: "#FBF6EB", borderColor: "#B8872A", borderRadius: "2px" }}>
+            <div className="flex items-center gap-2 mb-3">
+              <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.62rem", letterSpacing: "0.1em", textTransform: "uppercase", color: "#B8872A", fontWeight: 700 }}>
+                ⚠ Possible recurring issue detected at this location
+              </span>
+            </div>
+            <div className="grid grid-cols-2 gap-x-6 gap-y-2">
+              {[
+                ["Previous Complaint", result.repeat.tracking_code],
+                ["Previous Status", result.repeat.status],
+                ["Distance", `${result.repeat.distance_m} m away`],
+                ["Previous Resolution", result.repeat.proof_available ? "Proof submitted" : "No proof on record"],
+                ["New Complaint", COMPLAINT_ID],
+                ["Confidence", `${Math.round(result.repeat.confidence * 100)}%`],
+              ].map(([label, value]) => (
+                <div key={label} className="flex items-start justify-between gap-3 py-1.5 border-b" style={{ borderColor: "#EDE5D4" }}>
+                  <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.58rem", color: "#5C4A32", opacity: 0.6 }}>{label}</span>
+                  <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.62rem", color: "#1C0A00", fontWeight: 600, textAlign: "right" }}>{value}</span>
+                </div>
+              ))}
+            </div>
+            <p className="mt-3" style={{ fontFamily: "var(--font-body)", fontSize: "0.75rem", color: "#5C4A32", opacity: 0.75, lineHeight: 1.6 }}>
+              Your report is recorded as independent evidence linked to the earlier record — this flags a possible repeat for review, it does not judge the previous repair.
+            </p>
           </div>
         )}
         <div className="border mb-8" style={{ background: "#FAF7F2", borderColor: "#C8B89A", borderRadius: "2px" }}>
@@ -4665,6 +5407,9 @@ function ComplaintDetailPage({ onNavigate }: { onNavigate: (p: Page) => void }) 
               </div>
             </div>
 
+            {/* ── Round 3: verified location record (public-safe, no identity) ── */}
+            {complaint && <ComplaintLocationBlock complaint={complaint} />}
+
             {/* ── Civic Impact Score ── */}
             <div className="border" style={{ borderColor: "#C8B89A", borderRadius: "2px", background: "#FAF7F2", overflow: "hidden" }}>
               <div className="px-5 py-4 border-b" style={{ borderColor: "#C8B89A" }}>
@@ -5429,6 +6174,145 @@ function markerColor(issue: MapIssue): string {
   return "#5C4A32";
 }
 
+// ─── Live GPS civic map (Round 3) ────────────────────────────────────────────
+// Real Mapbox map: every marker is positioned by the complaint's stored
+// latitude/longitude. Privacy-first: only public-safe fields, never identity.
+function liveStatusColor(status: string): string {
+  if (status === "RESOLVED") return "#4A7C5F";
+  if (status === "DISPUTED") return "#B8872A";
+  if (status === "IN_PROGRESS") return "#3A6B9B";
+  if (status === "ASSESSED") return "#C4622D";
+  return "#9B3A3A"; // REPORTED
+}
+
+function escHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function LiveCivicMap({ catFilter, statusFilter }: { catFilter: string; statusFilter: string }) {
+  const { data } = useLiveComplaints();
+  const elRef = useRef<HTMLDivElement | null>(null);
+  const mapRef = useRef<mapboxgl.Map | null>(null);
+  const markersRef = useRef<mapboxgl.Marker[]>([]);
+  const [satView, setSatView] = useState(false);
+  const [visible, setVisible] = useState(0);
+  const [unlocated, setUnlocated] = useState(0);
+
+  useEffect(() => {
+    if (!MAPBOX_TOKEN || !elRef.current || mapRef.current) return;
+    try {
+      mapboxgl.accessToken = MAPBOX_TOKEN;
+      const map = new mapboxgl.Map({
+        container: elRef.current,
+        style: "mapbox://styles/mapbox/streets-v12",
+        center: [77.209, 28.6139],
+        zoom: 10,
+      });
+      map.addControl(new mapboxgl.NavigationControl({ showCompass: false }), "top-right");
+      mapRef.current = map;
+    } catch { /* token present but map failed — section stays hidden via visible===0 */ }
+    return () => {
+      markersRef.current.forEach(m => m.remove());
+      markersRef.current = [];
+      mapRef.current?.remove();
+      mapRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    mapRef.current?.setStyle(satView ? "mapbox://styles/mapbox/satellite-v9" : "mapbox://styles/mapbox/streets-v12");
+  }, [satView]);
+
+  // Markers from stored GPS coordinates.
+  useEffect(() => {
+    const map = mapRef.current;
+    markersRef.current.forEach(m => m.remove());
+    markersRef.current = [];
+    if (!map || !data) {
+      setVisible(0);
+      setUnlocated(0);
+      return;
+    }
+    const norm = (s: string) => s.toUpperCase().replace(/[\s_]+/g, "");
+    let shown = 0;
+    let missing = 0;
+    const bounds = new mapboxgl.LngLatBounds();
+    for (const c of data) {
+      if (c.lat == null || c.lng == null) {
+        missing++;
+        continue;
+      }
+      if (catFilter !== "All" && (CATEGORY_LABELS[c.category] || c.category) !== catFilter) continue;
+      if (statusFilter !== "All") {
+        const want = norm(statusFilter);
+        const got = norm(c.status);
+        const activeBucket = want === "REPORTED/ACTIVE" || want === "REPORTED";
+        if (!(activeBucket ? (got === "REPORTED" || got === "ASSESSED") : got === want)) continue;
+      }
+      const color = liveStatusColor(c.status);
+      const el = document.createElement("div");
+      el.style.cssText = `width:14px;height:14px;border-radius:50%;background:${color};border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,0.4);cursor:pointer;`;
+      const locLine = c.location_address
+        ? escHtml(c.location_address)
+        : `${c.lat.toFixed(4)}, ${c.lng.toFixed(4)}`;
+      const reported = new Date(c.created_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+      const resolution = c.status === "RESOLVED"
+        ? `<div style="margin-top:4px;color:#4A7C5F;">Resolved${c.resolved_at ? ` · ${escHtml(new Date(c.resolved_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }))}` : ""}${c.proof_distance_m != null ? ` · proof ${Math.round(c.proof_distance_m)} m away` : ""}</div>`
+        : `<div style="margin-top:4px;color:#5C4A32;">Status: ${escHtml(c.status.replace(/_/g, " "))}</div>`;
+      const linked = c.support_count > 1
+        ? `<div style="margin-top:4px;color:#B8872A;">${c.support_count} linked reports (possible duplicates merged)</div>`
+        : "";
+      const marker = new mapboxgl.Marker({ element: el })
+        .setLngLat([c.lng, c.lat])
+        .setPopup(new mapboxgl.Popup({ offset: 12 }).setHTML(
+          `<div style="font-family:monospace;min-width:200px;max-width:260px;">` +
+          `<div style="font-weight:700;font-size:13px;color:#1C0A00;">${escHtml(c.tracking_code)}</div>` +
+          `<div style="font-size:11px;color:#5C4A32;margin:2px 0;">${escHtml(CATEGORY_LABELS[c.category] || c.category)}</div>` +
+          `<div style="font-size:11px;color:#1C0A00;">📍 ${locLine}</div>` +
+          `<div style="font-size:11px;color:#5C4A32;">Reported ${escHtml(reported)}</div>` +
+          resolution + linked +
+          `</div>`
+        ))
+        .addTo(map);
+      markersRef.current.push(marker);
+      bounds.extend([c.lng, c.lat]);
+      shown++;
+    }
+    // Rebuild marker refs in order (mapbox Marker instances were just added).
+    setVisible(shown);
+    setUnlocated(missing);
+    if (shown > 0) {
+      try {
+        map.fitBounds(bounds, { padding: 40, maxZoom: 14 });
+      } catch { /* ignore */ }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, catFilter, statusFilter]);
+
+  if (!MAPBOX_TOKEN) return null;
+  return (
+    <div className="border relative mb-6" style={{ borderColor: "#C8B89A", borderRadius: "2px", background: "#FAF7F2", overflow: "hidden" }}>
+      <div className="px-4 py-2.5 border-b flex items-center justify-between flex-wrap gap-2" style={{ borderColor: "#C8B89A" }}>
+        <div style={{ fontFamily: "var(--font-mono)", fontSize: "0.6rem", letterSpacing: "0.12em", textTransform: "uppercase", color: "#1C0A00" }}>
+          Live GPS Map · <span style={{ fontWeight: 700 }}>{visible}</span> positioned by stored coordinates
+          {unlocated > 0 && <span style={{ color: "#5C4A32", opacity: 0.6 }}> · {unlocated} older report{unlocated === 1 ? "" : "s"} without GPS</span>}
+        </div>
+        <button onClick={() => setSatView(v => !v)}
+          className="px-3 py-1.5 border transition-colors hover:bg-[#EDE5D4]"
+          style={{ background: "#FAF7F2", borderColor: "#C8B89A", borderRadius: "1px",
+            fontFamily: "var(--font-mono)", fontSize: "0.55rem", letterSpacing: "0.08em", textTransform: "uppercase", color: "#1C0A00" }}>
+          {satView ? "Map" : "Satellite"}
+        </button>
+      </div>
+      <div ref={elRef} style={{ width: "100%", height: 420 }}/>
+      <div className="px-4 py-2 border-t" style={{ borderColor: "#C8B89A",
+        fontFamily: "var(--font-mono)", fontSize: "0.55rem", color: "#5C4A32", opacity: 0.65 }}>
+        Markers use exact reported GPS — no citizen identity is ever shown.
+      </div>
+    </div>
+  );
+}
+
 // ─── PAGE 12 — Public Civic Map ───────────────────────────────────────────────
 function PublicCivicMapPage({ onNavigate }: { onNavigate: (p: Page) => void }) {
   const [search, setSearch] = useState("");
@@ -5818,6 +6702,10 @@ function PublicCivicMapPage({ onNavigate }: { onNavigate: (p: Page) => void }) {
 
           {/* ── RIGHT: MAP ── */}
           <div>
+            {/* Round 3: live GPS map from stored coordinates (needs VITE_MAPBOX_TOKEN) */}
+            {MAPBOX_TOKEN !== "" && (
+              <LiveCivicMap catFilter={catFilter} statusFilter={statusFilter} />
+            )}
             {/* Map container */}
             <div className="border relative" style={{ borderColor: satView ? "#5F6368" : "#DADCE0", borderRadius: "8px", background: P.land, overflow: "hidden", boxShadow: "0 1px 2px rgba(60,64,67,0.3), 0 2px 6px 2px rgba(60,64,67,0.15)" }}>
 
@@ -7392,6 +8280,9 @@ function VerificationPage({ onNavigate }: { onNavigate: (p: Page) => void }) {
                 </div>
               </div>
             </div>
+
+            {/* ── Round 3: location committed into the tamper-evident record ── */}
+            {live?.complaint && <ComplaintLocationBlock complaint={live.complaint} />}
 
             {/* ── Navigation actions ── */}
             <div className="space-y-2.5">
@@ -11628,7 +12519,34 @@ function AuthorityComplaintDetailPage({ onNavigate }: { onNavigate: (p: Page) =>
   function handleProofSubmit() {
     try {
       const id = civic.selectedId;
-      if (id) civic.submitProof(id, "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==").catch(() => showSuccess("Offline — change kept locally."));
+      if (id) {
+        const photo = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+        const send = (resolution: { lat: number; lng: number; accuracy?: number | null; timestamp?: string | null } | null) =>
+          civic.submitProof(id, photo, resolution).catch(() => showSuccess("Offline — change kept locally."));
+        // Round 3: optional resolution coordinates (permission-gated, best-effort,
+        // never blocks submit) so the backend can show proof distance as evidence.
+        if ("geolocation" in navigator) {
+          let done = false;
+          const finish = (r: { lat: number; lng: number; accuracy?: number | null; timestamp?: string | null } | null) => {
+            if (done) return;
+            done = true;
+            send(r);
+          };
+          navigator.geolocation.getCurrentPosition(
+            (p) => finish({
+              lat: p.coords.latitude,
+              lng: p.coords.longitude,
+              accuracy: p.coords.accuracy != null && Number.isFinite(p.coords.accuracy) ? Math.round(p.coords.accuracy) : null,
+              timestamp: new Date().toISOString(),
+            }),
+            () => finish(null),
+            { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 }
+          );
+          setTimeout(() => finish(null), 9000);
+        } else {
+          send(null);
+        }
+      }
     } catch { showSuccess("Offline — change kept locally."); }
     setModal("");
     setProofSubmitted(true);
@@ -12495,7 +13413,8 @@ export default function App() {
   else if (page === "dashboard") content = <CitizenDashboard onNavigate={navigate}/>;
   else if (page === "report-category") content = <ReportCategoryPage onBack={() => navigate("dashboard")} onContinue={() => navigate("report-evidence")}/>;
   else if (page === "report-evidence") content = <ReportEvidencePage onBack={() => navigate("report-category")} onContinue={() => navigate("report-details")}/>;
-  else if (page === "report-details") content = <ReportDetailsPage onBack={() => navigate("report-evidence")} onContinue={() => navigate("complaint-submitted")}/>;
+  else if (page === "report-details") content = <ReportDetailsPage onBack={() => navigate("report-evidence")} onContinue={() => navigate("report-location")}/>;
+  else if (page === "report-location") content = <ReportLocationPage onBack={() => navigate("report-details")} onContinue={() => navigate("complaint-submitted")}/>;
   else if (page === "complaint-submitted") content = <ComplaintSubmittedPage onNavigate={navigate}/>;
   else if (page === "my-complaints") content = <MyComplaintsPage onNavigate={navigate}/>;
   else if (page === "complaint-detail") content = <ComplaintDetailPage onNavigate={navigate}/>;
@@ -12550,6 +13469,7 @@ export default function App() {
               style={{ borderColor: "#1C0A00", color: "#1C0A00", borderRadius: "1px" }}>
               Authority Login
             </button>
+            <ConnectWalletButton />
           </div>
 
           {/* Mobile toggle */}
@@ -12576,6 +13496,19 @@ export default function App() {
                     className="block font-mono text-xs tracking-widest uppercase opacity-60"
                     style={{ color: "#1C0A00" }} onClick={() => setNavOpen(false)}>{item}</a>
             ))}
+            <div className="flex flex-wrap gap-2 pt-2">
+              <button onClick={() => { navigate("auth"); setNavOpen(false); }}
+                className="px-3 py-2 border font-mono text-xs tracking-widest uppercase"
+                style={{ borderColor: "#C8B89A", color: "#5C4A32", borderRadius: "1px" }}>
+                Citizen Login
+              </button>
+              <button onClick={() => { navigate("authority-login"); setNavOpen(false); }}
+                className="px-3 py-2 border font-mono text-xs tracking-widest uppercase"
+                style={{ borderColor: "#1C0A00", color: "#1C0A00", borderRadius: "1px" }}>
+                Authority Login
+              </button>
+              <ConnectWalletButton onDone={() => setNavOpen(false)} />
+            </div>
           </div>
         )}
       </nav>

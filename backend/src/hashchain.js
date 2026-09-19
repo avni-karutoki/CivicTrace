@@ -28,7 +28,10 @@ const norm = (v) => v ?? null;
 // Canonical payload: all nullable fields normalized to null so the keys
 // hashed at insert time exactly match what verifyChain reconstructs
 // (JSON.stringify drops `undefined` keys but keeps `null`).
-function chainPayload({ complaintId, fromStatus, toStatus, actorId, actorRole, note, createdAtMs, prevHash }) {
+//
+// Round 3: `locHash` (canonical location hash) is included ONLY when present.
+// Pre-location events hash exactly as before, so existing chains keep verifying.
+function chainPayload({ complaintId, fromStatus, toStatus, actorId, actorRole, note, createdAtMs, prevHash, locHash }) {
   return JSON.stringify({
     complaintId,
     fromStatus: norm(fromStatus),
@@ -38,6 +41,7 @@ function chainPayload({ complaintId, fromStatus, toStatus, actorId, actorRole, n
     note: norm(note),
     createdAtMs,
     prevHash,
+    ...(locHash != null ? { locHash } : {}),
   });
 }
 export async function appendStatusEvent({
@@ -47,12 +51,13 @@ export async function appendStatusEvent({
   actorId,
   actorRole,
   note,
+  locHash,
 }) {
   const prevHash = await getLastHash(complaintId);
   const createdAt = new Date().toISOString();
   // NOTE: hashed as epoch millis, not string — Postgres returns timestamptz
   // as +00:00 while we insert Z format, so raw strings would never match.
-  const thisHash = sha256(chainPayload({
+  const hashWith = (lh) => sha256(chainPayload({
     complaintId,
     fromStatus,
     toStatus,
@@ -61,10 +66,15 @@ export async function appendStatusEvent({
     note,
     createdAtMs: new Date(createdAt).getTime(),
     prevHash,
+    locHash: lh ?? null,
   }));
   const id = nanoid();
 
-  const { error } = await supabase.from("status_events").insert({
+  // location_hash column comes from migration_location.sql; fall back to a
+  // legacy column-less insert (with the legacy hash recomputed to match) on
+  // databases where the migration hasn't run yet.
+  let thisHash = hashWith(locHash ?? null);
+  const row = {
     id,
     complaint_id: complaintId,
     from_status: fromStatus ?? null,
@@ -75,10 +85,28 @@ export async function appendStatusEvent({
     prev_hash: prevHash,
     this_hash: thisHash,
     created_at: createdAt,
-  });
+    ...(locHash != null ? { location_hash: locHash } : {}),
+  };
+  let { error } = await supabase.from("status_events").insert(row);
+  if (error && /location_hash|could not find|column .* does not exist/i.test(error.message ?? "")) {
+    thisHash = hashWith(null);
+    const legacyRow = {
+      id,
+      complaint_id: complaintId,
+      from_status: fromStatus ?? null,
+      to_status: toStatus,
+      actor_id: actorId ?? null,
+      actor_role: actorRole ?? null,
+      note: note ?? null,
+      prev_hash: prevHash,
+      this_hash: thisHash,
+      created_at: createdAt,
+    };
+    ({ error } = await supabase.from("status_events").insert(legacyRow));
+  }
   if (error) throw error;
 
-  return { id, complaintId, fromStatus, toStatus, actorId, actorRole, note, prevHash, thisHash, createdAt };
+  return { id, complaintId, fromStatus, toStatus, actorId, actorRole, note, prevHash, thisHash, createdAt, locHash: locHash ?? null };
 }
 
 // Walk the chain for a complaint and verify it's unbroken.
@@ -105,6 +133,9 @@ export async function verifyChain(complaintId) {
       note: ev.note,
       createdAtMs: new Date(ev.created_at).getTime(),
       prevHash: ev.prev_hash,
+      // Pre-migration rows have no location_hash key at all → omitted,
+      // exactly reproducing the legacy payload they were hashed with.
+      locHash: ev.location_hash ?? null,
     }));
     const linkOk = ev.prev_hash === expectedPrev;
     const hashOk = recomputed === ev.this_hash;
