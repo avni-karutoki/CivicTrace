@@ -43,6 +43,8 @@ async function findUserByEmail(email) {
   return data ?? null;
 }
 
+let otpDebugWarned = false;
+
 /** Shared OTP-send step. Attaches debugOtp in non-production when SMTP is off. */
 async function sendCode(email, purpose, res) {
   const issued = await issueOtp(supabase, email, purpose);
@@ -59,7 +61,18 @@ async function sendCode(email, purpose, res) {
     emailSent: delivery.sent,
     expiresInSec: Math.floor(OTP_TTL_MS / 1000),
   };
-  if (!delivery.sent && isOtpDebugAllowed()) payload.debugOtp = issued.code;
+  // Dev mode (explicit opt-in): OTP_DEBUG=true forces the code into the API
+  // response so the citizen + authority login UIs can display it — even in
+  // production and even when the email was sent. DEV ONLY: anyone can read
+  // another user's login code from the response. Remove once SMTP works.
+  const debugForced = process.env.OTP_DEBUG === "true";
+  if ((!delivery.sent && isOtpDebugAllowed()) || debugForced) {
+    payload.debugOtp = issued.code;
+    if (debugForced && !otpDebugWarned) {
+      otpDebugWarned = true;
+      console.warn("[auth] OTP_DEBUG=true — OTPs are exposed in API responses. Dev only, disable in production!");
+    }
+  }
   return res.json(payload);
 }
 
