@@ -128,9 +128,11 @@ function CivicIllustration() {
   );
 }
 
-// ─── Auth Page (Login only — no signup toggle) ────────────────────────────────────
+// ─── Auth Page (Citizen login + signup) ────────────────────────────────────
 function AuthPage({ onBack, onSuccess }: { onBack: () => void; onSuccess?: () => void }) {
   const [step, setStep] = useState<"credentials" | "otp">("credentials");
+  const [mode, setMode] = useState<"login" | "signup">("login");
+  const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [otp, setOtp] = useState(["", "", "", "", "", ""]);
   const [loading, setLoading] = useState(false);
@@ -161,6 +163,17 @@ function AuthPage({ onBack, onSuccess }: { onBack: () => void; onSuccess?: () =>
     setCooldown(0);
   }
 
+  function switchMode(m: "login" | "signup") {
+    setMode(m);
+    setStep("credentials");
+    setOtp(["", "", "", "", "", ""]);
+    setLoginErr("");
+    setErrCode("");
+    setInfoMsg("");
+    setDebugOtp("");
+    setCooldown(0);
+  }
+
   function errCodeOf(e: unknown) {
     return (e as { code?: string })?.code ?? "";
   }
@@ -175,11 +188,16 @@ function AuthPage({ onBack, onSuccess }: { onBack: () => void; onSuccess?: () =>
       setLoginErr("Please enter a valid email address (e.g. you@example.com).");
       return;
     }
+    if (mode === "signup" && name.trim().length < 2) {
+      setLoginErr("Please enter your full name to create an account.");
+      return;
+    }
     setLoading(true);
     try {
-      const res = isResend
-        ? await civic.loginRequestOtp(trimmed, "citizen")
+      const res = mode === "signup"
+        ? await civic.signupRequestOtp(name.trim(), trimmed, "citizen")
         : await civic.loginRequestOtp(trimmed, "citizen");
+      void isResend;
       setStep("otp");
       setOtp(["", "", "", "", "", ""]);
       setCooldown(60);
@@ -205,7 +223,11 @@ function AuthPage({ onBack, onSuccess }: { onBack: () => void; onSuccess?: () =>
     }
     setLoading(true);
     try {
-      await civic.loginVerifyOtp(email.trim(), code, "citizen");
+      if (mode === "signup") {
+        await civic.signupVerifyOtp(name.trim(), email.trim(), code, "citizen");
+      } else {
+        await civic.loginVerifyOtp(email.trim(), code, "citizen");
+      }
       onSuccess?.();
     } catch (e) {
       setLoginErr(e instanceof Error ? e.message : "Verification failed. Try again.");
@@ -379,13 +401,25 @@ function AuthPage({ onBack, onSuccess }: { onBack: () => void; onSuccess?: () =>
                 {/* Fields */}
                 <div className="space-y-4">
                   {step === "credentials" && (
-                    <div>
-                      <label style={labelStyle}>Email Address</label>
-                      <input type="email" style={inputStyle} placeholder="you@example.com"
-                        value={email} onChange={e => { setEmail(e.target.value); if (loginErr) { setLoginErr(""); setErrCode(""); } }}
-                        onKeyDown={e => { if (e.key === "Enter") handleSendCode(); }} />
-                      <div style={{ fontFamily: "var(--font-body)", fontSize: "0.75rem", color: "#5C4A32", marginTop: "6px", opacity: 0.7 }}>
-                        We'll send a 6-digit login code to your registered email.
+                    <div className="space-y-4">
+                      {mode === "signup" && (
+                        <div>
+                          <label style={labelStyle}>Full Name</label>
+                          <input type="text" style={inputStyle} placeholder="Your name"
+                            value={name} onChange={e => { setName(e.target.value); if (loginErr) { setLoginErr(""); setErrCode(""); } }}
+                            onKeyDown={e => { if (e.key === "Enter") handleSendCode(); }} />
+                        </div>
+                      )}
+                      <div>
+                        <label style={labelStyle}>Email Address</label>
+                        <input type="email" style={inputStyle} placeholder="you@example.com"
+                          value={email} onChange={e => { setEmail(e.target.value); if (loginErr) { setLoginErr(""); setErrCode(""); } }}
+                          onKeyDown={e => { if (e.key === "Enter") handleSendCode(); }} />
+                        <div style={{ fontFamily: "var(--font-body)", fontSize: "0.75rem", color: "#5C4A32", marginTop: "6px", opacity: 0.7 }}>
+                          {mode === "signup"
+                            ? "We'll send a 6-digit verification code to create your account."
+                            : "We'll send a 6-digit login code to your registered email."}
+                        </div>
                       </div>
                     </div>
                   )}
@@ -460,20 +494,28 @@ function AuthPage({ onBack, onSuccess }: { onBack: () => void; onSuccess?: () =>
                       <circle cx="7" cy="7" r="5" stroke="#F5F0E8" strokeWidth="1.5" strokeDasharray="20 12"/>
                     </svg>
                   ) : (
-                    <>
+                      <>
                       <span className="w-1.5 h-1.5 rounded-full" style={{ background: "#9B3A3A" }}/>
-                      {step === "otp" ? "Verify & Continue" : "Send Login Code"}
+                      {step === "otp" ? "Verify & Continue" : mode === "signup" ? "Send Verification Code" : "Send Login Code"}
                     </>
                   )}
                 </button>
                 {loginErr && (
                   <div className="mt-3 text-center" style={{ fontFamily: "var(--font-mono)", fontSize: "0.62rem", color: "#9B3A3A" }}>
                     {loginErr}
-                    {errCode === "NOT_REGISTERED" && (
+                    {errCode === "NOT_REGISTERED" && mode === "login" && (
                       <div className="mt-1.5">
                         <span style={{ color: "#5C4A32" }}>Don't have an account? </span>
-                        <button onClick={() => onBack()} className="underline hover:opacity-80" style={{ color: "#3A6B9B" }}>
-                          Go back & Create Account
+                        <button onClick={() => switchMode("signup")} className="underline hover:opacity-80" style={{ color: "#3A6B9B" }}>
+                          Create Account
+                        </button>
+                      </div>
+                    )}
+                    {errCode === "ALREADY_REGISTERED" && mode === "signup" && (
+                      <div className="mt-1.5">
+                        <span style={{ color: "#5C4A32" }}>Already registered? </span>
+                        <button onClick={() => switchMode("login")} className="underline hover:opacity-80" style={{ color: "#3A6B9B" }}>
+                          Sign In instead
                         </button>
                       </div>
                     )}
