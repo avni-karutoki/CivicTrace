@@ -143,7 +143,6 @@ DEPLOYER_PRIVATE_KEY=0xYourTestnetWalletKey
 BASE_SEPOLIA_RPC=https://sepolia.base.org
 AMOY_RPC=https://rpc-amoy.polygon.technology
 ```
-
 ---
 
 ## Key Features
