@@ -61,6 +61,12 @@ async function sendCode(email, purpose, res) {
     emailSent: delivery.sent,
     expiresInSec: Math.floor(OTP_TTL_MS / 1000),
   };
+  if (delivery.error) {
+    // Surface the real reason (bad app password, blocked, etc.) so misconfig
+    // is diagnosable from the API instead of failing silently.
+    payload.deliveryError = delivery.error;
+    payload.message = `Verification code generated for ${email}. (Email delivery failed: ${String(delivery.error).slice(0, 120)})`;
+  }
   // Dev mode (explicit opt-in): OTP_DEBUG=true forces the code into the API
   // response so the citizen + authority login UIs can display it — even in
   // production and even when the email was sent. DEV ONLY: anyone can read

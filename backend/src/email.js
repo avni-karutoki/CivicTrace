@@ -104,6 +104,18 @@ export function isOtpDebugAllowed() {
   return process.env.NODE_ENV !== "production"; // dev default: on
 }
 
+/** Safe SMTP diagnostics for /health — never returns the password. */
+export async function smtpStatus() {
+  if (!isSmtpConfigured()) return { configured: false };
+  const tx = getTransporter();
+  try {
+    await tx.verify();
+    return { configured: true, verified: true };
+  } catch (err) {
+    return { configured: true, verified: false, error: String(err?.message ?? err).slice(0, 160) };
+  }
+}
+
 export async function sendOtpEmail(to, code, purpose) {
   const subject =
     purpose === "signup"

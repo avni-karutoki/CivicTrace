@@ -3,6 +3,7 @@ import express from "express";
 import cors from "cors";
 import { supabase } from "./supabase.js";
 import { asyncHandler } from "./asyncHandler.js";
+import { smtpStatus } from "./email.js";
 import authRoutes from "./routes/auth.js";
 import complaintsRoutes from "./routes/complaints.js";
 import leaderboardRoutes from "./routes/leaderboard.js";
@@ -101,6 +102,7 @@ app.get("/health", asyncHandler(async (req, res) => {
       return `unknown format (starts with "${k.slice(0, 6)}…", length ${k.length})`;
     })(),
     supabaseProbe: probe,
+    smtp: await smtpStatus(),
   });
 }));
 
