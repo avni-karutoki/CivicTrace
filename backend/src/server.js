@@ -91,6 +91,15 @@ app.get("/health", asyncHandler(async (req, res) => {
     db: "supabase",
     supabaseUrlHost,
     supabaseKeyConfigured: Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY),
+    supabaseKeyType: (() => {
+      const k = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+      if (!k) return "(missing)";
+      if (k.startsWith("sb_secret_")) return "sb_secret (correct — server-role secret)";
+      if (k.startsWith("sb_publishable")) return "sb_publishable (WRONG — public key, Supabase will 401)";
+      if (k.startsWith("eyJ")) return "legacy JWT (check it is the service_role one, not anon)";
+      if (/paste|your|example|placeholder|…/i.test(k)) return "(placeholder text — paste the real key)";
+      return `unknown format (starts with "${k.slice(0, 6)}…", length ${k.length})`;
+    })(),
     supabaseProbe: probe,
   });
 }));
