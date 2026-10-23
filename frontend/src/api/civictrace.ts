@@ -6,7 +6,9 @@ export async function apiFetch(
   options: RequestInit = {}
 ) {
   const token = localStorage.getItem("civictrace_token");
-  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${endpoint}`, {
     ...options,
     headers: {
       "Content-Type": "application/json",
@@ -14,6 +16,16 @@ export async function apiFetch(
       ...(options.headers || {}),
     },
   });
+  } catch (e) {
+    // fetch() only throws for network-level failures: server down, DNS,
+    // CORS preflight rejected, or mixed content (HTTPS page → HTTP API).
+    console.error(`[api] Cannot reach backend at ${API_BASE_URL}${endpoint}`, e);
+    const err = new Error(
+      "Cannot reach the CivicTrace server. Please make sure the backend is running (npm run dev in /backend) and try again in a moment."
+    ) as Error & { code?: string; status?: number; retryAfterSec?: number };
+    err.status = 0;
+    throw err;
+  }
 
   // Backend error middleware always returns JSON, but guard anyway:
   // proxies / CORS blocks / empty bodies can be non-JSON.
