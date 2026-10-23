@@ -33,6 +33,16 @@ export default defineConfig(({ mode }) => {
       host: process.env.FIGMA_DEV_SERVER_HOST || '0.0.0.0',
       port: parseInt(process.env.PORT || '8443'),
       strictPort: true,
+      // Same-origin /api proxy → removes CORS preflights and mixed-content
+      // blocks entirely. The frontend calls "/api/auth/..." and Vite forwards
+      // it to the Express backend with the /api prefix stripped.
+      proxy: {
+        '/api': {
+          target: 'http://localhost:4000',
+          changeOrigin: true,
+          rewrite: (path) => path.replace(/^\/api/, ''),
+        },
+      },
       watch: {
         ignored: [
           '**/.figma/**',

@@ -1,5 +1,16 @@
-const API_BASE_URL =
-  import.meta.env.VITE_API_URL?.replace(/\/$/, "") || "http://localhost:4000";
+// API routing:
+//  - VITE_API_URL set (deployment with a known backend host) → use it.
+//  - Otherwise → same-origin "/api". With the Vite dev proxy this reaches the
+//    local backend without CORS or mixed-content issues; in production set
+//    VITE_API_URL (exp/next build) to the hosted backend root URL.
+const envApiUrl = import.meta.env.VITE_API_URL?.replace(/\/$/, "");
+export const API_BASE_URL = envApiUrl || "/api";
+if (!envApiUrl && typeof window !== "undefined" && !["localhost", "127.0.0.1"].includes(window.location.hostname)) {
+  console.warn(
+    `[civictrace] No VITE_API_URL configured — API calls go to same-origin ${API_BASE_URL}. ` +
+    "If the app is NOT served next to the backend, set VITE_API_URL to the backend URL and rebuild."
+  );
+}
 
 export async function apiFetch(
   endpoint: string,
