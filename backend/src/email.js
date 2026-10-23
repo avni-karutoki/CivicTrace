@@ -72,11 +72,14 @@ export async function validateEmail(raw) {
 }
 
 // ─── OTP email delivery ──────────────────────────────────────────────────────
-// Configure real delivery with SMTP env vars (Gmail App Password works):
-//   SMTP_HOST=smtp.gmail.com SMTP_PORT=587 SMTP_USER=you@gmail.com
-//   SMTP_PASS=<16-char app password> SMTP_FROM="CivicTrace <you@gmail.com>"
-// Without SMTP, OTPs are logged to the backend console and (in non-production)
-// returned as `debugOtp` so the demo still works end-to-end.
+// Delivery providers, auto-selected in this order:
+//   1. BREVO_API_KEY  — Brevo transactional email over HTTPS API (works on
+//     Render's free tier, where outbound SMTP ports 25/465/587 are blocked).
+//     Set BREVO_SENDER_EMAIL to your Brevo-verified sender address.
+//   2. SMTP_*         — classic SMTP via nodemailer (works everywhere Except
+//     Render free tier). kept as provider #2 for other hosts.
+//   3. None           — OTPs logged to the backend console and (in
+//     non-production or with OTP_DEBUG=true) returned as `debugOtp`.
 
 let transporter = null;
 
@@ -98,21 +101,77 @@ export function isSmtpConfigured() {
   return Boolean(SMTP_HOST && SMTP_USER && SMTP_PASS);
 }
 
+async function sendViaBrevo(to, subject, text) {
+  try {
+    const res = await fetch("https://api.brevo.com/v3/smtp/email", {
+      method: "POST",
+      headers: {
+        "api-key": process.env.BREVO_API_KEY,
+        "content-type": "application/json",
+        accept: "application/json",
+      },
+      body: JSON.stringify({
+        sender: {
+          email: process.env.BREVO_SENDER_EMAIL || process.env.SMTP_USER,
+          name: "CivicTrace",
+        },
+        to: [{ email: to }],
+        subject,
+        textContent: text,
+      }),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (res.ok) return { sent: true };
+    let detail = `Brevo responded ${res.status}`;
+    try {
+      const body = await res.json();
+      detail = `Brevo ${res.status}: ${body?.message ?? JSON.stringify(body).slice(0, 140)}`;
+    } catch { /* keep status-code detail */ }
+    return { sent: false, error: detail };
+  } catch (err) {
+    return { sent: false, error: `Brevo request failed: ${String(err?.message ?? err).slice(0, 120)}` };
+  }
+}
+
+async function sendViaSmtp(to, subject, text) {
+  const tx = getTransporter();
+  if (!tx) return { sent: false, error: "SMTP not configured" };
+  try {
+    await tx.sendMail({
+      from: process.env.SMTP_FROM || process.env.SMTP_USER,
+      to,
+      subject,
+      text,
+    });
+    return { sent: true };
+  } catch (err) {
+    return { sent: false, error: `SMTP: ${err?.message ?? "send failed"}` };
+  }
+}
+
+export function activeEmailProvider() {
+  if (process.env.BREVO_API_KEY) return "brevo";
+  if (isSmtpConfigured()) return "smtp";
+  return "none";
+}
+
 export function isOtpDebugAllowed() {
   if (process.env.OTP_DEBUG === "true") return true;
   if (process.env.OTP_DEBUG === "false") return false;
   return process.env.NODE_ENV !== "production"; // dev default: on
 }
 
-/** Safe SMTP diagnostics for /health — never returns the password. */
+/** Safe diagnostics for /health — never returns keys or passwords. */
 export async function smtpStatus() {
-  if (!isSmtpConfigured()) return { configured: false };
+  const provider = activeEmailProvider();
+  if (provider === "none") return { configured: false, provider };
+  if (provider === "brevo") return { configured: true, provider, verified: null };
   const tx = getTransporter();
   try {
     await tx.verify();
-    return { configured: true, verified: true };
+    return { configured: true, provider, verified: true };
   } catch (err) {
-    return { configured: true, verified: false, error: String(err?.message ?? err).slice(0, 160) };
+    return { configured: true, provider, verified: false, error: String(err?.message ?? err).slice(0, 160) };
   }
 }
 
@@ -126,22 +185,24 @@ export async function sendOtpEmail(to, code, purpose) {
     `  ${code}\n\n` +
     `It expires in 10 minutes. If you did not request this, please ignore this email.`;
 
-  const tx = getTransporter();
-  if (!tx) {
-    console.log(`[auth] (no SMTP) OTP for ${to} [${purpose}]: ${code}`);
+  const provider = activeEmailProvider();
+  let delivery;
+  if (provider === "brevo") {
+    delivery = await sendViaBrevo(to, subject, text);
+  } else if (provider === "smtp") {
+    delivery = await sendViaSmtp(to, subject, text);
+    // Some hosts (e.g. Render free tier) block outbound SMTP entirely — if a
+    // Brevo key is configured as backup, use it before giving up.
+    if (!delivery.sent && process.env.BREVO_API_KEY) {
+      delivery = await sendViaBrevo(to, subject, text);
+    }
+  } else {
+    console.log(`[auth] (no email provider) OTP for ${to} [${purpose}]: ${code}`);
     return { sent: false };
   }
-  try {
-    await tx.sendMail({
-      from: process.env.SMTP_FROM || process.env.SMTP_USER,
-      to,
-      subject,
-      text,
-    });
-    return { sent: true };
-  } catch (err) {
-    console.error("[auth] SMTP send failed:", err?.message);
-    console.log(`[auth] (smtp failed) OTP for ${to} [${purpose}]: ${code}`);
-    return { sent: false, error: err?.message };
+  if (!delivery.sent) {
+    console.error(`[auth] Email send failed (${provider}):`, delivery.error);
+    console.log(`[auth] (send failed) OTP for ${to} [${purpose}]: ${code}`);
   }
+  return delivery;
 }
