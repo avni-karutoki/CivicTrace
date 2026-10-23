@@ -55,7 +55,45 @@ async function ensureSeeded() {
   }
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, time: new Date().toISOString(), db: "supabase" }));
+app.get("/health", asyncHandler(async (req, res) => {
+  // Diagnostic: reports which Supabase host the deployed instance is pointed
+  // at (host only — never the key) plus a live minimal REST probe, so a
+  // misconfigured URL/placeholder key shows up as a precise message instead
+  // of a raw server-side "TypeError: fetch failed" on the first login.
+  let supabaseUrlHost = "(missing)";
+  try {
+    if (process.env.SUPABASE_URL) supabaseUrlHost = new URL(process.env.SUPABASE_URL).host;
+  } catch {
+    supabaseUrlHost = "(unparseable — not a valid URL)";
+  }
+
+  let probe = { status: "skipped", detail: "no Supabase URL" };
+  if (supabaseUrlHost && process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    try {
+      const r = await fetch(`${process.env.SUPABASE_URL}/rest/v1/departments?select=id&limit=1`, {
+        headers: {
+          apikey: process.env.SUPABASE_SERVICE_ROLE_KEY,
+          Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
+        },
+        signal: AbortSignal.timeout(8000),
+      });
+      probe = r.ok
+        ? { status: "ok", detail: `supabase responded ${r.status}` }
+        : { status: "error", detail: `supabase responded ${r.status} ${r.statusText}` };
+    } catch (e) {
+      probe = { status: "error", detail: e?.cause?.code || e?.message?.slice(0, 120) || "fetch failed" };
+    }
+  }
+
+  res.json({
+    ok: true,
+    time: new Date().toISOString(),
+    db: "supabase",
+    supabaseUrlHost,
+    supabaseKeyConfigured: Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY),
+    supabaseProbe: probe,
+  });
+}));
 
 // Additive Web3 status — no effect on existing routes when disabled.
 app.get("/onchain/status", (req, res) => {
